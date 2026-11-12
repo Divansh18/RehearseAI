@@ -1,0 +1,15 @@
+{
+  "description": "Invented text cases for the first session-memory milestone. Expected behavior is semantic, not an exact sentence.",
+  "cases": [
+    {"id": "name_misheard_manual", "turns": ["My name is Mia."], "manual_name": "Maya", "expect": ["speech name remains tentative", "manual spelling becomes confirmed", "later STT variants do not overwrite it"]},
+    {"id": "spoken_name_correction", "turns": ["My name is Mia.", "It's Maya, not Mia."], "expect": ["name is Maya and confirmed", "question and probe allowance are unchanged"]},
+    {"id": "technical_term_correction", "turns": ["I used web books to receive GitHub events.", "I said webhooks, not web books."], "expect": ["current fact uses webhooks", "raw STT remains unchanged", "correction history retains old value"]},
+    {"id": "correction_and_answer", "turns": ["Actually, I used MySQL, not PostgreSQL. I built the webhook handler myself."], "expect": ["technology correction is stored", "new answer content is processed once"]},
+    {"id": "ambiguous_target", "turns": ["It's MySQL, not PostgreSQL."], "expect": ["ask one brief target clarification", "do not guess a fact or spend a probe"]},
+    {"id": "known_project_fact", "turns": ["I built a GitHub pull-request checker that posts risk reports as comments."], "expect": ["project purpose is available to the next decision", "follow-up asks for a missing detail such as personal contribution"]},
+    {"id": "unfinished_answer", "turns": ["I built a checker because the main problem was..."], "expect": ["wait for continuation rather than infer a challenge"]},
+    {"id": "spoken_stop", "turns": ["Stop the interview."], "expect": ["stop before correction or answer routing", "no later main question"]},
+    {"id": "repeat", "turns": ["Please repeat the question."], "expect": ["repeat active question", "do not spend substantive probe"]},
+    {"id": "correction_during_generation", "turns": ["I built a GitHub app.", "I said webhook, not web book."], "expect": ["obsolete decision is cancelled or discarded", "correction does not become an answer", "pending question is preserved"]}
+  ]
+}

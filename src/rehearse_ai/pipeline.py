@@ -70,8 +70,31 @@ DECISION_SCHEMA = {
             "enum": ["technical_example", "no_example", "nontechnical", "unclear"],
         },
         "tone": {"type": "string", "enum": ["neutral", "gentle"]},
+        "facts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "field": {
+                        "type": "string",
+                        "enum": [
+                            "project_name",
+                            "project_purpose",
+                            "contribution",
+                            "technical_challenges",
+                            "testing_evidence",
+                            "technical_terms",
+                            "technologies",
+                        ],
+                    },
+                    "wording": {"type": "string"},
+                },
+                "required": ["field", "wording"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["action", "text", "project_fragment", "project_status", "tone"],
+    "required": ["action", "text", "project_fragment", "project_status", "tone", "facts"],
     "additionalProperties": False,
 }
 FEEDBACK_SCHEMA = {
@@ -200,7 +223,7 @@ def inference_adapter(llm: OpenAILLMService):
         }[kind]
         response = await llm.run_inference(
             LLMContext(messages=[{"role": "user", "content": json.dumps(payload)}]),
-            max_tokens=220,
+            max_tokens=320 if kind == "decision" else 220,
             system_instruction=load_prompt(kind),
             response_schema=schema,
         )
@@ -302,6 +325,13 @@ class LiveSession:
         @transport.event_handler("on_client_disconnected")
         async def disconnected(_transport: SmallWebRTCTransport, _client: Any) -> None:
             await self.stop()
+
+        @transport.event_handler("on_app_message")
+        async def app_message(_transport: SmallWebRTCTransport, message: Any, _sender: str) -> None:
+            if isinstance(message, dict) and message.get("type") == "confirm_name":
+                name = message.get("name")
+                if isinstance(name, str):
+                    await self.session.confirm_name(name)
 
     async def run(self) -> None:
         try:

@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from rehearse_ai.memory import SessionMemory
+
 QUESTIONS = (
     "Tell me about a project you're proud of.",
     "What was the hardest technical problem in it?",
@@ -52,6 +54,7 @@ class Stage(Enum):
     AWAITING_NO_PROJECT_EXAMPLE = auto()
     AWAITING_NO_PROJECT_CHOICE = auto()
     AWAITING_FEEDBACK = auto()
+    AWAITING_CORRECTION_RETURN = auto()
     EARLY_CLOSING = auto()
     COMPLETE = auto()
     ENDED_EARLY = auto()
@@ -92,6 +95,7 @@ class UtteranceKind(Enum):
     NO_PROJECT_SCOPE = auto()
     FEEDBACK = auto()
     EARLY_FEEDBACK = auto()
+    CORRECTION_ACK = auto()
 
 
 @dataclass(frozen=True)
@@ -128,7 +132,7 @@ class InterviewController:
         self._follow_ups = [0] * len(QUESTIONS)
         self._clarifications = [0] * len(QUESTIONS)
         self._greeting_response = ""
-        self._preferred_name: str | None = None
+        self.memory = SessionMemory()
         self._name_declined = False
         self._name_detour = False
         self._name_repeats = 0
@@ -144,6 +148,8 @@ class InterviewController:
         self._opening_repeats = {Stage.AWAITING_GREETING: 0, Stage.AWAITING_READINESS: 0}
         self._readiness_nudges = 0
         self._readiness_clarifications = 0
+        self._correction_return_stage: Stage | None = None
+        self._correction_resume_utterance: Utterance | None = None
 
     @property
     def stage(self) -> Stage:
@@ -179,7 +185,8 @@ class InterviewController:
 
     @property
     def preferred_name(self) -> str | None:
-        return self._preferred_name
+        fact = self.memory.get("candidate_name")
+        return fact.value if fact else None
 
     @property
     def name_declined(self) -> bool:
@@ -193,14 +200,58 @@ class InterviewController:
     def remaining_detours(self) -> int:
         return 2 - self._detours[self._question_index] if self._question_index >= 0 else 2
 
-    def remember_name(self, name: str) -> None:
+    def remember_name(
+        self,
+        name: str,
+        *,
+        source_turn: int | None = None,
+        supplied_wording: str | None = None,
+        confirmed: bool = False,
+        correction: bool = False,
+        superseded_wording: str | None = None,
+    ) -> None:
         if not name or len(name) > 40 or not all(part.isalpha() for part in name.split()):
             raise ValueError("Preferred name must be short plain text")
-        self._preferred_name = name
+        self.memory.supply(
+            "candidate_name",
+            name,
+            source_turn=source_turn,
+            supplied_wording=supplied_wording or name,
+            confirmed=confirmed,
+            correction=correction,
+            superseded_wording=superseded_wording,
+        )
         self._name_declined = False
 
     def decline_name(self) -> None:
         self._name_declined = True
+
+    def acknowledge_correction(self, text: str) -> Utterance:
+        if self._stage in {Stage.COMPLETE, Stage.ENDED_EARLY, Stage.EARLY_CLOSING}:
+            raise InvalidTransition("The interview has ended")
+        self._correction_return_stage = self._stage
+        self._correction_resume_utterance = self._interrupted
+        self._interrupted = None
+        return self._prepare(UtteranceKind.CORRECTION_ACK, text, None)
+
+    def resume_after_correction(self) -> Utterance | None:
+        self._require(Stage.AWAITING_CORRECTION_RETURN)
+        previous = self._correction_return_stage
+        self._correction_return_stage = None
+        if self._correction_resume_utterance is not None:
+            self._interrupted = self._correction_resume_utterance
+            self._correction_resume_utterance = None
+            self._stage = Stage.DELIVERING
+            return self.retry_interrupted()
+        self._stage = previous or Stage.AWAITING_ANSWER
+        return None
+
+    def accept_interrupted_correction_ack(self) -> None:
+        self._require(Stage.DELIVERING)
+        if self._interrupted is None or self._interrupted.kind is not UtteranceKind.CORRECTION_ACK:
+            raise InvalidTransition("No correction acknowledgement was interrupted")
+        self._interrupted = None
+        self._stage = Stage.AWAITING_CORRECTION_RETURN
 
     @property
     def remaining_follow_ups(self) -> int:
@@ -262,7 +313,7 @@ class InterviewController:
             acknowledgement += "."
         if greeting_readiness is Readiness.READY:
             return self._prepare(UtteranceKind.OPENING_ACK, acknowledgement, None)
-        if ask_name and not self._preferred_name and not self._name_declined:
+        if ask_name and not self.preferred_name and not self._name_declined:
             return self._prepare(
                 UtteranceKind.NAME_PROMPT, f"{acknowledgement} {NAME_PROMPT}", None
             )
@@ -348,11 +399,11 @@ class InterviewController:
         index = self._question_index
         self._detours[index] = min(self._detours[index] + 1, 2)
         self._detour_resume_prompt = resume_prompt
-        if self._preferred_name:
+        if self.preferred_name:
             self._name_detour = False
             return self._prepare(
                 UtteranceKind.DETOUR_ACK,
-                f"I have you as {self._preferred_name}. Would you like to continue or finish?",
+                f"I have you as {self.preferred_name}. Would you like to continue or finish?",
                 index,
             )
         if self._name_declined:
@@ -775,6 +826,8 @@ class InterviewController:
             self._stage = Stage.COMPLETE
         elif utterance.kind is UtteranceKind.EARLY_FEEDBACK:
             self._stage = Stage.ENDED_EARLY
+        elif utterance.kind is UtteranceKind.CORRECTION_ACK:
+            self._stage = Stage.AWAITING_CORRECTION_RETURN
         else:
             self._stage = Stage.AWAITING_ANSWER
         return True

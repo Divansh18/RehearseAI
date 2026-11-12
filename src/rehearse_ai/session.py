@@ -4,6 +4,7 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from rehearse_ai.interview import (
@@ -17,6 +18,7 @@ from rehearse_ai.interview import (
     Utterance,
     UtteranceKind,
 )
+from rehearse_ai.memory import FACT_FIELDS, FactField
 from rehearse_ai.session_log import SessionLog
 
 Infer = Callable[[str, dict[str, Any]], Awaitable[Mapping[str, Any]]]
@@ -31,6 +33,42 @@ _REPEAT = re.compile(
     re.IGNORECASE,
 )
 _SKIP = re.compile(r"^(?:please\s+)?(?:skip(?: this question)?|next question)\??[.!]?$", re.I)
+_CORRECTION = re.compile(
+    r"^\s*(?:(?:actually|sorry)\s*[, ]\s*)?"
+    r"(?P<cue>it's|it is|i said|i meant|i used|my name is)\s+"
+    r"(?P<replacement>.+?)\s*,?\s+not\s+(?P<superseded>[^.!?,]+)"
+    r"(?P<remainder>[.!?,].*)?$",
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class _CorrectionRequest:
+    cue: str
+    replacement: str
+    superseded: str
+    remainder: str
+
+
+def _parse_correction(text: str) -> _CorrectionRequest | None:
+    clauses = re.split(r"(?<=[.!?])\s+", text.replace("’", "'").strip())
+    for index, clause in enumerate(clauses):
+        match = _CORRECTION.fullmatch(clause)
+        if match:
+            remainder = [*clauses[:index]]
+            remainder.extend(
+                part for part in [(match["remainder"] or "").lstrip(".!?, ").strip()] if part
+            )
+            remainder.extend(clauses[index + 1 :])
+            return _CorrectionRequest(
+                match["cue"].lower(),
+                match["replacement"].strip(" ,"),
+                match["superseded"].strip(),
+                " ".join(remainder).strip(),
+            )
+    return None
+
+
 _END_CLAUSE = re.compile(
     r"(?:please\s+)?(?:"
     r"(?:can|could|may|would)\s+(?:i|we|you)\s+"
@@ -338,6 +376,7 @@ class InterviewSession:
         self._end_reason = "user_request"
         self._interrupted_candidate_turn: str | None = None
         self._project_prompt_for_detour: Utterance | None = None
+        self._pending_correction: _CorrectionRequest | None = None
 
     @property
     def response_task(self) -> asyncio.Task[None] | None:
@@ -346,6 +385,239 @@ class InterviewSession:
     def _record(self, event: str, **details: Any) -> None:
         entry = self.log.record(event, **details)
         self._publish({"type": "rehearseai", "event": entry})
+
+    async def confirm_name(self, name: str) -> bool:
+        """Accept an explicit browser edit, without trusting later STT variants over it."""
+        if (
+            self._closed
+            or self._stop_latched
+            or self.controller.stage
+            in {
+                Stage.COMPLETE,
+                Stage.ENDED_EARLY,
+                Stage.EARLY_CLOSING,
+            }
+        ):
+            return False
+        previous = self.controller.memory.get("candidate_name")
+        try:
+            self.controller.remember_name(
+                name.strip(),
+                source_turn=None,
+                supplied_wording=name.strip(),
+                confirmed=True,
+                correction=previous is not None
+                and previous.value.casefold() != name.strip().casefold(),
+            )
+        except ValueError:
+            self._record("name_confirmation_rejected", speaker=None, reason="invalid_name")
+            return False
+        if previous and previous.value.casefold() != name.strip().casefold():
+            self._record(
+                "correction_applied",
+                speaker=None,
+                field="candidate_name",
+                superseded_wording=previous.value,
+                supplied_wording=name.strip(),
+                source_turn=None,
+                update_source="manual_confirmation",
+            )
+        self._record(
+            "memory_updated",
+            speaker=None,
+            field="candidate_name",
+            value=self.controller.preferred_name,
+            confirmed=True,
+            source_turn=None,
+            update_source="manual_confirmation",
+        )
+        task = self._response_task
+        if task and not task.done():
+            self._generation += 1
+            task.cancel()
+            self._response_task = None
+            if self.controller.stage in {
+                Stage.AWAITING_PROPOSAL,
+                Stage.AWAITING_OPENING_ACK,
+                Stage.AWAITING_FEEDBACK,
+            }:
+                self._start_response()
+        return True
+
+    def _remember_spoken_name(self, name: str, wording: str) -> None:
+        previous = self.controller.memory.get("candidate_name")
+        self.controller.remember_name(
+            name,
+            source_turn=self._turn_number or None,
+            supplied_wording=wording,
+            confirmed=False,
+        )
+        current = self.controller.memory.get("candidate_name")
+        if current is not previous:
+            self._record(
+                "memory_updated",
+                speaker=None,
+                field="candidate_name",
+                value=current.value,
+                confirmed=current.confirmed,
+                source_turn=current.source_turn,
+                update_source="spoken_name_extraction",
+            )
+
+    def _correction_field(self, request: _CorrectionRequest) -> FactField | None:
+        old = request.superseded
+        matching = [
+            field_name
+            for field_name, fact in self.controller.memory.facts.items()
+            if re.search(rf"(?<!\w){re.escape(old)}(?!\w)", fact.value, re.I)
+        ]
+        if request.cue == "i used":
+            return "technologies"
+        if request.cue == "my name is" or "candidate_name" in matching:
+            return "candidate_name"
+        if len(matching) == 1:
+            return matching[0]
+        if request.cue in {"i said", "i meant"} and not matching:
+            return "technical_terms"
+        if request.cue in {"it's", "it is"} and self.controller.stage in {
+            Stage.AWAITING_GREETING,
+            Stage.AWAITING_NAME,
+            Stage.AWAITING_READINESS,
+            Stage.AWAITING_OPENING_ACK,
+        }:
+            return "candidate_name"
+        return None
+
+    async def _route_correction(self, answer: str) -> str | None:
+        request = _parse_correction(answer)
+        field_name: FactField | None = None
+        if self._pending_correction is not None:
+            pending = self._pending_correction
+            self._pending_correction = None
+            if request is None:
+                label = re.sub(r"[^a-z ]", " ", answer.lower())
+                if "name" in label:
+                    field_name = "candidate_name"
+                elif "technology" in label or "tool" in label:
+                    field_name = "technologies"
+                elif "term" in label:
+                    field_name = "technical_terms"
+                request = pending if field_name else None
+            elif request == pending:
+                self._record(
+                    "correction_target_unresolved", speaker=None, source_turn=self._turn_number
+                )
+                await self._queue_speech(
+                    self.controller.acknowledge_correction(
+                        "I couldn't place that correction. You can edit your name on screen."
+                    )
+                )
+                return ""
+        if request is None:
+            return None
+        field_name = field_name or self._correction_field(request)
+        if field_name is None:
+            self._pending_correction = request
+            self._record("correction_needs_target", speaker=None, source_turn=self._turn_number)
+            await self._queue_speech(
+                self.controller.acknowledge_correction(
+                    "Which detail should I correct—your name or a project term?"
+                )
+            )
+            return ""
+        previous = self.controller.memory.get(field_name)
+        replacement = request.replacement
+        if previous and field_name != "candidate_name":
+            replacement = re.sub(
+                rf"(?<!\w){re.escape(request.superseded)}(?!\w)",
+                lambda _match: request.replacement,
+                previous.value,
+                flags=re.I,
+            )
+        try:
+            if field_name == "candidate_name":
+                self.controller.remember_name(
+                    replacement,
+                    source_turn=self._turn_number,
+                    supplied_wording=answer,
+                    confirmed=True,
+                    correction=True,
+                    superseded_wording=request.superseded,
+                )
+            else:
+                self.controller.memory.supply(
+                    field_name,
+                    replacement,
+                    source_turn=self._turn_number,
+                    supplied_wording=answer,
+                    confirmed=True,
+                    correction=True,
+                    superseded_wording=request.superseded,
+                )
+        except ValueError:
+            self._record(
+                "correction_rejected",
+                speaker=None,
+                field=field_name,
+                source_turn=self._turn_number,
+                reason="invalid_value",
+            )
+            return ""
+        self._record(
+            "correction_applied",
+            speaker=None,
+            field=field_name,
+            superseded_wording=request.superseded,
+            supplied_wording=request.replacement,
+            source_turn=self._turn_number,
+        )
+        self._record(
+            "memory_updated",
+            speaker=None,
+            field=field_name,
+            value=replacement,
+            confirmed=True,
+            source_turn=self._turn_number,
+            update_source="spoken_correction",
+        )
+        for related_field, related_fact in list(self.controller.memory.facts.items()):
+            if related_field in {field_name, "candidate_name", "project_name"}:
+                continue
+            corrected_value = re.sub(
+                rf"(?<!\w){re.escape(request.superseded)}(?!\w)",
+                lambda _match: request.replacement,
+                related_fact.value,
+                flags=re.I,
+            )
+            if corrected_value == related_fact.value:
+                continue
+            self.controller.memory.supply(
+                related_field,
+                corrected_value,
+                source_turn=self._turn_number,
+                supplied_wording=answer,
+                confirmed=True,
+                correction=True,
+                superseded_wording=request.superseded,
+            )
+            self._record(
+                "memory_updated",
+                speaker=None,
+                field=related_field,
+                value=corrected_value,
+                confirmed=True,
+                source_turn=self._turn_number,
+                update_source="spoken_correction",
+            )
+        if request.remainder:
+            return request.remainder
+        acknowledgement = (
+            f"Thanks, I'll call you {replacement}."
+            if field_name == "candidate_name"
+            else "Thanks, I've corrected that."
+        )
+        await self._queue_speech(self.controller.acknowledge_correction(acknowledgement))
+        return ""
 
     def turn_signal(self, signal: str, **details: Any) -> None:
         if not self._closed:
@@ -525,11 +797,30 @@ class InterviewSession:
             configured_pause_secs=self._turn_pause_secs,
         )
         self._turn_started_at = None
-        self._latest_candidate_turn = answer
-
         if not self._stop_latched and _is_stop_request(answer):
             await self._end_early(answer)
             return
+
+        if (
+            self.controller.interrupted_utterance is not None
+            and self.controller.interrupted_utterance.kind is UtteranceKind.CORRECTION_ACK
+        ):
+            if not answer or _is_sentence_request(_REPEAT, answer):
+                await self._queue_speech(self.controller.retry_interrupted())
+                return
+            self.controller.accept_interrupted_correction_ack()
+            resumed = self.controller.resume_after_correction()
+            if resumed is not None:
+                await self._queue_speech(resumed)
+                return
+
+        if not self._stop_latched:
+            corrected = await self._route_correction(answer)
+            if corrected == "":
+                return
+            if corrected is not None:
+                answer = corrected
+        self._latest_candidate_turn = answer
 
         if self.controller.stage is Stage.AWAITING_CONTINUE_CHOICE:
             self._choice_turn = answer
@@ -913,6 +1204,8 @@ class InterviewSession:
             and _asks_coach_identity(answer)
         ):
             name = _preferred_name(answer, prompted=self.controller.stage is Stage.AWAITING_NAME)
+            if name:
+                self._remember_spoken_name(name, answer)
             self._record(
                 "candidate_detour",
                 speaker="candidate",
@@ -940,6 +1233,8 @@ class InterviewSession:
                 return True
             readiness = _classify_greeting_readiness(answer)
             name = None if _NAME_DECLINE.search(answer) else _preferred_name(answer, prompted=True)
+            if name:
+                self._remember_spoken_name(name, answer)
             self._record(
                 "name_response",
                 speaker="candidate",
@@ -1074,6 +1369,8 @@ class InterviewSession:
             "current_question": self.controller.current_question,
             "greeting_response": self.controller.greeting_response,
             "preferred_name": self.controller.preferred_name,
+            "session_memory": self.controller.memory.for_model(),
+            "correction_overlays": self.controller.memory.corrections_for_model(),
             "project_established": self.controller.project_established,
             "answers_by_question": [list(turns) for turns in self.controller.answers],
             "answers_by_question_before_latest_turn": answers_before_latest,
@@ -1256,6 +1553,7 @@ class InterviewSession:
         return True
 
     async def _apply_interview_decision(self, result: Mapping[str, Any], generation: int) -> None:
+        self._remember_proposed_facts(result, generation)
         action = str(result.get("action", "")).upper()
         text = result.get("text", "")
         project_status = result.get("project_status")
@@ -1326,6 +1624,70 @@ class InterviewSession:
             await self._queue_speech(utterance)
         else:
             self._start_response()
+
+    def _remember_proposed_facts(self, result: Mapping[str, Any], generation: int) -> None:
+        action = str(result.get("action", "")).upper()
+        if action not in {"FOLLOW_UP", "NUDGE", "CLARIFICATION", "WAIT", "ADVANCE"}:
+            return
+        if result.get("project_status") in {"no_example", "nontechnical"}:
+            return
+        proposed = result.get("facts", [])
+        if not isinstance(proposed, list):
+            return
+        source = self._latest_candidate_turn
+        for item in proposed[:6]:
+            if not isinstance(item, dict):
+                continue
+            field_name, wording = item.get("field"), item.get("wording")
+            if field_name not in FACT_FIELDS or field_name == "candidate_name":
+                continue
+            if not isinstance(wording, str) or not wording.strip() or len(wording) > 240:
+                continue
+            if wording.casefold() not in source.casefold():
+                self._record(
+                    "memory_proposal_rejected",
+                    speaker=None,
+                    generation=generation,
+                    field=field_name,
+                    reason="not_in_latest_turn",
+                )
+                continue
+            if any(
+                correction.superseded_wording
+                and re.search(
+                    rf"(?<!\w){re.escape(correction.superseded_wording)}(?!\w)",
+                    wording,
+                    re.I,
+                )
+                for correction in self.controller.memory.corrections
+            ):
+                self._record(
+                    "memory_proposal_rejected",
+                    speaker=None,
+                    generation=generation,
+                    field=field_name,
+                    reason="superseded_wording",
+                )
+                continue
+            previous = self.controller.memory.get(field_name)
+            fact = self.controller.memory.supply(
+                field_name,
+                wording,
+                source_turn=self._turn_number,
+                supplied_wording=wording,
+                confirmed=False,
+            )
+            if fact is not previous:
+                self._record(
+                    "memory_updated",
+                    speaker=None,
+                    field=field_name,
+                    value=fact.value,
+                    confirmed=False,
+                    source_turn=self._turn_number,
+                    update_source="model_extraction",
+                    generation=generation,
+                )
 
     async def _respond(self, generation: int) -> None:
         opening_turn: str | None = None
@@ -1517,6 +1879,8 @@ class InterviewSession:
                     name = _preferred_name(
                         turn, prompted=self.controller.stage is Stage.AWAITING_NAME
                     )
+                    if name:
+                        self._remember_spoken_name(name, turn)
                     utterance = self.controller.answer_opening_question(reply, name)
                     self._record(
                         "candidate_detour",
@@ -1531,7 +1895,7 @@ class InterviewSession:
 
             if not self._stop_latched and self.controller.stage is Stage.AWAITING_OPENING_ACK:
                 if name := _preferred_name(self.controller.greeting_response, prompted=False):
-                    self.controller.remember_name(name)
+                    self._remember_spoken_name(name, self.controller.greeting_response)
                     self._record(
                         "preferred_name_received", speaker="candidate", preferred_name=name
                     )
@@ -1613,6 +1977,7 @@ class InterviewSession:
                     validated=True,
                 )
                 if status == "technical_example":
+                    self._remember_proposed_facts(result, generation)
                     self._answer_snapshot = self.controller.answers[0]
                     self.controller.accept_project_example(turn)
                     self._record("project_example_accepted", speaker="candidate")
@@ -1786,6 +2151,8 @@ class InterviewSession:
                     name = _preferred_name(
                         opening_turn, prompted=self.controller.stage is Stage.AWAITING_NAME
                     )
+                    if name:
+                        self._remember_spoken_name(name, opening_turn)
                     await self._queue_speech(
                         self.controller.answer_opening_question("You can call me RehearseAI.", name)
                     )
@@ -2130,6 +2497,16 @@ class InterviewSession:
                     self._latest_candidate_turn = self.controller.answers[
                         self.controller.current_question_number - 1
                     ][-1]
+                    self._start_response()
+            elif self.controller.stage is Stage.AWAITING_CORRECTION_RETURN:
+                next_utterance = self.controller.resume_after_correction()
+                if next_utterance is not None:
+                    asyncio.create_task(self._queue_speech(next_utterance))
+                elif self.controller.stage in {
+                    Stage.AWAITING_PROPOSAL,
+                    Stage.AWAITING_OPENING_ACK,
+                    Stage.AWAITING_FEEDBACK,
+                }:
                     self._start_response()
                 else:
                     asyncio.create_task(self._queue_speech(next_utterance))

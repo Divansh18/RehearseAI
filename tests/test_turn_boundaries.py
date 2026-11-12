@@ -10,7 +10,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 
 from rehearse_ai.export_session import build_export
-from rehearse_ai.interview import QUESTIONS, Stage
+from rehearse_ai.interview import QUESTIONS, Stage, UtteranceKind
 from rehearse_ai.pipeline import InterviewInput
 from rehearse_ai.session import InterviewSession
 from rehearse_ai.session_log import SessionLog
@@ -106,6 +106,34 @@ async def test_multiple_final_stt_segments_one_turn_and_one_decision(tmp_path):
     assert len([row for row in rows if row["event"] == "inference_started"]) == 1
     latency, _, _ = build_export(rows)
     assert latency[0]["stt_final_ms"] == segments[-1]["session_elapsed_ms"]
+
+
+@pytest.mark.asyncio
+async def test_split_stt_correction_updates_memory_without_answer_or_decision(tmp_path):
+    input_adapter = InterviewInput()
+    input_adapter.push_frame = lambda _frame, _direction=FrameDirection.DOWNSTREAM: settle()
+
+    async def infer(_kind, _payload):
+        raise AssertionError("A correction alone is not an interview answer")
+
+    session = InterviewSession(
+        SessionLog(tmp_path, "split-correction"), infer, input_adapter.speak, lambda _: None
+    )
+    input_adapter.session = session
+    await start_questions(session)
+    deliver(session)
+    for frame in (
+        final("I said webhooks,", 1),
+        UserStartedSpeakingFrame(),
+        final("not web books.", 2),
+        UserStoppedSpeakingFrame(),
+    ):
+        await input_adapter.process_frame(frame, FrameDirection.DOWNSTREAM)
+    assert session.controller.memory.get("technical_terms").value == "webhooks"
+    assert session.controller.answers[0] == ()
+    assert session.controller.remaining_follow_ups == 1
+    assert session.controller.pending.kind is UtteranceKind.CORRECTION_ACK
+    await session.close()
 
 
 @pytest.mark.asyncio

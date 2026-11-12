@@ -107,6 +107,31 @@ async def test_locked_pipecat_pipeline_assembles_without_provider_calls(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_webrtc_name_confirmation_message_reaches_current_session(tmp_path):
+    settings = Settings(
+        deepgram_api_key="test-dg",
+        openai_api_key="test-oa",
+        cartesia_api_key="test-ca",
+        session_dir=tmp_path,
+    )
+    connection = SmallWebRTCConnection()
+    live = LiveSession(connection, settings)
+    input_transport = next(
+        processor
+        for processor in live.pipeline.processors
+        if type(processor).__name__ == "SmallWebRTCInputTransport"
+    )
+    await input_transport._client._callbacks.on_app_message(
+        {"type": "confirm_name", "name": "Maya"}, "test-peer"
+    )
+    await asyncio.sleep(0)
+    fact = live.session.controller.memory.get("candidate_name")
+    assert fact.value == "Maya" and fact.confirmed
+    await live.stop()
+    await connection.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_tts_one_does_not_receive_unsupported_style_instructions(tmp_path):
     settings = Settings(
         deepgram_api_key="test-dg",
