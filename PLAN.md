@@ -1,5 +1,11 @@
 # RehearseAI implementation plan
 
+## Candidate platform milestone 2: verified accounts
+
+The existing take-home plan below describes the voice prototype. The new candidate-platform direction adds authentication first, without changing interview policy, providers, or Pipecat. `server.py` authorizes dashboard, voice page, and WebRTC offer setup from an HttpOnly database-backed session; the authenticated candidate ID is attached to the new raw voice session. `accounts.py` owns FastAPI Users account operations, CSRF, rate limits, one-time action links, and SMTP delivery. `accounts_db.py` and `migrations/` own PostgreSQL schema. The browser keeps plain HTML/CSS/JS, adding account forms and an empty dashboard. Development and test databases are separate; Mailpit captures local messages only.
+
+Acceptance: sign up, verify once before link expiry, log in, see an honest empty dashboard, log out, log in again, request/reset a password, and observe all old sessions rejected. Anonymous and unverified clients cannot load the dashboard or voice page or establish a WebRTC offer. CSRF and rate-limit checks cover sensitive POST routes. Existing interview regressions must continue to pass. Production SMTP/HTTPS and microphone verification remain open; scheduling, saved interviews, PDFs, and public deployment are excluded.
+
 ## Architecture
 
 The first post-prototype reliability milestone adds provider-independent `memory.py`, owned by the existing controller. It stores a tentative or confirmed name and one current candidate-supplied value per project fact, with source turns and explicit correction history. `session.py` routes clear “replacement, not earlier wording” corrections before ordinary answers, logs memory changes separately from raw STT, and validates literal fact spans returned by the existing structured decision request. The browser confirms or edits the name over the existing data channel. Delivery-aware correction acknowledgements return to the pending state or retry an interrupted prompt with a new utterance ID. The four questions, provider selection, and turn thresholds remain unchanged. Synthetic offline cases are in `evals/memory_cases.json`; microphone verification remains pending.

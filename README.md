@@ -1,29 +1,50 @@
 # RehearseAI
 
-RehearseAI is a local browser voice coach for a four-question project interview. It listens to a spoken answer, may ask one relevant follow-up or nudge per question, and finishes a normal session with brief answer-grounded feedback and a sign-off. The opening, optional name, readiness, stop requests, repeats, and interruptions are handled separately from the four questions. See the [recorded session](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [matching evidence](evidence/recorded-session/), and [submission checklist](SUBMISSION_CHECKLIST.md).
+RehearseAI is becoming a candidate interview platform. This milestone adds verified email/password accounts and a protected candidate dashboard. The existing four-question Pipecat voice interview remains available at `/interview` for verified candidates. Assignment scheduling, saved interview records, and PDFs are **not implemented**; the dashboard shows honest empty states. The earlier take-home [recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [evidence](evidence/recorded-session/), and [checklist](SUBMISSION_CHECKLIST.md) describe the prototype, not the new account flow.
 
 ## Run locally
 
-Python **3.11+** is required (the repository's `.python-version` selects 3.12). Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
+Python **3.11+**, [uv](https://docs.astral.sh/uv/getting-started/installation/), and Docker Compose are required for local development. Start persistent PostgreSQL and a local Mailpit inbox:
 
 ```sh
+docker compose up -d --wait
 uv sync --frozen --group dev
-cp .env.example .env
+test -f .env || cp .env.example .env
 ```
 
-Create server-side keys at [Deepgram](https://developers.deepgram.com/docs/create-additional-api-keys), [OpenAI](https://platform.openai.com/api-keys), and [Cartesia](https://play.cartesia.ai/keys). Put `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, and `CARTESIA_API_KEY` in `.env`. With `REHEARSE_TTS_PROVIDER=openai`, the Cartesia key is not required. `.env.example` lists every setting and its current default; no key belongs in browser assets. Start with one command:
+If `.env` already exists, keep it and add the new account variables from `.env.example` rather than overwriting it. Set `REHEARSE_AUTH_SECRET` to a locally generated value of at least 32 characters (`python -c 'import secrets; print(secrets.token_urlsafe(48))'`). The local `DATABASE_URL` in `.env.example` points to the Compose development database. The test database is separate. Fill in server-side `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, and `CARTESIA_API_KEY` from [Deepgram](https://developers.deepgram.com/docs/create-additional-api-keys), [OpenAI](https://platform.openai.com/api-keys), and [Cartesia](https://play.cartesia.ai/keys). Cartesia is not needed if `REHEARSE_TTS_PROVIDER=openai`. Keys never belong in browser assets.
+
+Apply the explicit migration, then start the app:
 
 ```sh
+uv run alembic upgrade head
 uv run python -m rehearse_ai
 ```
 
-Open **http://127.0.0.1:7860/**, select **Start interview**, and grant microphone access. Headphones reduce feedback into the microphone. The server binds only to loopback. `/healthz` and the browser's collapsed Diagnostics area show the running build ID; refresh after a restart to compare them. **End session** releases the browser microphone and peer connection immediately. Normal and spoken early closing use a short buffered-audio drain before automatic cleanup, which is an approximation rather than a browser playout acknowledgment.
+Open **http://127.0.0.1:7860/**. Create an account, open the verification link in the local inbox at **http://127.0.0.1:8025/**, then sign in. `/dashboard` is protected. The existing voice prototype is at `/interview` after verification; it is not an assigned interview or a saved record. `docker compose down` stops local services without deleting the database volume; do not use `down -v` unless you deliberately want to remove local data. The app binds to loopback.
+
+For the dedicated test database, first run:
+
+```sh
+DATABASE_URL=postgresql+asyncpg://rehearse:rehearse_local_only@127.0.0.1:5433/rehearse_test uv run alembic upgrade head
+uv run pytest -q
+```
+
+The account integration tests use this test database and mocked email delivery; they never delete development data. A separate local end-to-end check used real SMTP capture in Mailpit. Mailpit is an inbox for development, **not production email delivery**. `/healthz` and the voice page's collapsed Diagnostics area show the running build ID. **End session** releases the microphone and peer connection immediately. Normal and spoken early closing use a short buffered-audio drain, which is not a browser playout acknowledgment.
+
+## Candidate account architecture
+
+`server.py` gates `/dashboard`, `/interview`, and `/api/offer` using the candidate obtained from the server session cookie. The browser never supplies a trusted candidate ID. `accounts.py` uses [FastAPI Users 15](https://fastapi-users.github.io/fastapi-users/latest/) for Argon2 password hashing, database-backed session strategy, and signed verification/reset tokens. The package is in maintenance mode but receives security and dependency updates; its database strategy permits logout revocation and a 12-hour session lifetime. `accounts_db.py` defines PostgreSQL account, session, single-use link, and rate-limit records; `migrations/` changes schema explicitly. `Mailer` uses SMTP; local settings point to Mailpit. No database code enters the interview controller.
+
+Verification and reset links expire after one hour and are accepted once using a stored token digest. Resending invalidates earlier verification links. Login and account actions have database-backed rate limits (login: 10 per email per 10 minutes; resend/reset requests: 3 per email per hour, with IP limits too). The session cookie is HttpOnly and SameSite=Lax; production sets Secure. Unsafe account and WebRTC setup requests require a signed, one-hour CSRF token in both a cookie and request header. The login flow uses fixed internal destinations and ignores external return URLs. Token-bearing URLs are removed from browser history on page load; Uvicorn access logs are disabled so they are not recorded there. A future reverse proxy must also redact query strings. Email verification confirms inbox control, not personal identity.
+
+For production configuration, use a private PostgreSQL `DATABASE_URL`, a new `REHEARSE_AUTH_SECRET`, `REHEARSE_ENV=production`, an HTTPS `REHEARSE_PUBLIC_BASE_URL`, and a real SMTP service through `REHEARSE_SMTP_HOST`, `REHEARSE_SMTP_PORT`, `REHEARSE_SMTP_FROM`, `REHEARSE_SMTP_USERNAME`, `REHEARSE_SMTP_PASSWORD`, and `REHEARSE_SMTP_STARTTLS=true`. Production email credentials and delivery have **not** been configured or tested. HTTPS termination, operational monitoring, assigned interviews, durable interview storage, and PDFs remain future work. Existing ignored JSONL voice logs are not exposed by static routes or shown as saved candidate interviews. Logging out or resetting the password stops that candidate’s active voice peer. A peer that remains connected across the 12-hour cookie expiry is not yet rechecked mid-call; new setup requests and HTTP routes require a live session.
 
 ## Architecture and provider choices
 
 `SmallWebRTC` browser audio → Pipecat `VADProcessor` (Silero) → Deepgram streaming STT (`nova-3-general`) → Pipecat `UserTurnProcessor` → `InterviewInput` → OpenAI text LLM (`gpt-4.1-mini`, structured `run_inference`) → Cartesia streaming TTS (`sonic-3.6`, Skylar `db6b0ed5-d5d3-463d-ae85-518a07d3c2b4`) → `AudioObserver` → SmallWebRTC output → `DeliveryObserver`.
 
-The STT, text LLM, and TTS are separate services; there is no realtime speech-to-speech model. The text LLM runs as a structured Pipecat service call outside the audio frame chain, and its validated JSON is never spoken directly. `interview.py` owns exact question order, state, limits, and the provider-independent `memory.py` session facts. `session.py` routes completed turns, validates decisions and literal fact extracts, cancels stale generations, and correlates utterance IDs. In `pipeline.py`, `InterviewInput` merges final STT chunks until turn completion; `AudioObserver` correlates TTS contexts and drops stale audio; `DeliveryObserver` observes transport speaking frames. `tts.py` chooses a provider and observes provider chunks independently of transport output. `session_log.py` writes raw ordered events. `config.py` validates only credentials for the selected providers. Versioned prompt files in `src/rehearse_ai/prompts/` are the runtime authority; [PROMPTS.md](PROMPTS.md) includes their exact text and iteration record.
+The STT, text LLM, and TTS are separate services; there is no realtime speech-to-speech model. The text LLM runs as a structured Pipecat service call outside the audio frame chain, and its validated JSON is never spoken directly. `interview.py` owns exact question order, state, limits, and the provider-independent `memory.py` session facts. `session.py` routes completed turns, validates decisions and literal fact extracts, cancels stale generations, and correlates utterance IDs. In `pipeline.py`, `InterviewInput` merges final STT chunks until turn completion; `AudioObserver` correlates TTS contexts and drops stale audio; `DeliveryObserver` observes transport speaking frames. `tts.py` chooses a provider and observes provider chunks independently of transport output. `session_log.py` writes raw ordered events. `config.py` validates provider credentials and account/email settings. Versioned prompt files in `src/rehearse_ai/prompts/` are the runtime authority; [PROMPTS.md](PROMPTS.md) includes their exact text and iteration record.
 
 The current session remembers a tentative or confirmed candidate name and small project facts with source turn references. The Interview card lets the candidate confirm or edit the name; manual confirmation takes priority over later STT variants. A clear spoken name correction is acknowledged once with the corrected name. A spoken term correction such as “I said webhooks, not web books” updates the matching fact and preserves the old value in correction history. Correction-only turns neither answer a question nor use its probe allowance; an ambiguous target gets one short clarification. The structured decision request includes current facts and asks for exact spans from the latest answer, which Python checks before storing as tentative. Raw STT is never rewritten. This memory stays in one session; it is not a durable profile or proof that a tentative extraction is accurate. The decision still uses one buffered model request, with a larger token cap for the optional fact list; latency impact has not been measured.
 

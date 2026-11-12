@@ -238,9 +238,19 @@ def inference_adapter(llm: OpenAILLMService):
 
 
 class LiveSession:
-    def __init__(self, connection: Any, settings: Settings, *, build_id: str | None = None) -> None:
+    def __init__(
+        self,
+        connection: Any,
+        settings: Settings,
+        *,
+        build_id: str | None = None,
+        candidate_id: str | None = None,
+    ) -> None:
         self.connection = connection
+        self.candidate_id = candidate_id
         self.log = SessionLog(settings.session_dir, str(uuid.uuid4()))
+        if candidate_id is not None:
+            self.log.record("candidate_authenticated", candidate_id=candidate_id)
         transport = SmallWebRTCTransport(
             webrtc_connection=connection,
             params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),

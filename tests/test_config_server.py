@@ -12,6 +12,14 @@ from rehearse_ai.config import ConfigurationError, Settings
 from rehearse_ai.pipeline import LiveSession
 from rehearse_ai.server import create_app
 
+AUTH_ENV = {
+    "DATABASE_URL": "postgresql+asyncpg://rehearse:local@127.0.0.1:5433/rehearse_test",
+    "REHEARSE_AUTH_SECRET": "test-only-secret-at-least-thirty-two-characters",
+    "REHEARSE_PUBLIC_BASE_URL": "http://127.0.0.1:7860",
+    "REHEARSE_SMTP_HOST": "127.0.0.1",
+    "REHEARSE_SMTP_FROM": "RehearseAI <no-reply@localhost>",
+}
+
 
 def test_missing_credentials_name_only(tmp_path):
     with pytest.raises(ConfigurationError, match="DEEPGRAM_API_KEY, OPENAI_API_KEY"):
@@ -20,6 +28,7 @@ def test_missing_credentials_name_only(tmp_path):
 
 def test_bad_local_config_is_actionable(tmp_path):
     env = {
+        **AUTH_ENV,
         "DEEPGRAM_API_KEY": "test-dg",
         "OPENAI_API_KEY": "test-oa",
         "CARTESIA_API_KEY": "test-ca",
@@ -54,12 +63,32 @@ def test_bad_local_config_is_actionable(tmp_path):
 
 
 def test_only_selected_tts_provider_needs_its_credential(tmp_path):
-    shared = {"DEEPGRAM_API_KEY": "test-dg", "OPENAI_API_KEY": "test-oa"}
+    shared = {**AUTH_ENV, "DEEPGRAM_API_KEY": "test-dg", "OPENAI_API_KEY": "test-oa"}
     with pytest.raises(ConfigurationError, match="CARTESIA_API_KEY"):
         Settings.load(shared, tmp_path / "none")
     settings = Settings.load({**shared, "REHEARSE_TTS_PROVIDER": "openai"}, tmp_path / "none")
     assert settings.cartesia_api_key is None
     assert settings.tts_provider == "openai"
+
+
+def test_account_configuration_requires_database_secret_and_production_transport(tmp_path):
+    voice = {"DEEPGRAM_API_KEY": "dg", "OPENAI_API_KEY": "oa", "CARTESIA_API_KEY": "ca"}
+    with pytest.raises(ConfigurationError, match="DATABASE_URL"):
+        Settings.load(voice, tmp_path / "none")
+    with pytest.raises(ConfigurationError, match="REHEARSE_AUTH_SECRET"):
+        Settings.load({**voice, **AUTH_ENV, "REHEARSE_AUTH_SECRET": "short"}, tmp_path / "none")
+    with pytest.raises(ConfigurationError, match="HTTPS"):
+        Settings.load({**voice, **AUTH_ENV, "REHEARSE_ENV": "production"}, tmp_path / "none")
+    with pytest.raises(ConfigurationError, match="SMTP username"):
+        Settings.load(
+            {
+                **voice,
+                **AUTH_ENV,
+                "REHEARSE_ENV": "production",
+                "REHEARSE_PUBLIC_BASE_URL": "https://example.com",
+            },
+            tmp_path / "none",
+        )
 
 
 def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
@@ -70,16 +99,16 @@ def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
         assert health["status"] == "ready"
         assert health["build_id"].startswith("0.1.0+")
         assert health_response.headers["cache-control"] == "no-store"
-        page = client.get("/")
+        assert client.get("/", follow_redirects=False).status_code == 303
+        page = client.get("/login")
         assert page.status_code == 200
-        assert "Start interview" in page.text
-        assert "Four questions about your project, followed by short feedback." in page.text
-        assert "voice is AI-generated" in page.text
-        assert f"Build {health['build_id']}" in page.text
+        assert "Create account" in page.text
         assert page.headers["cache-control"] == "no-store"
         assert client.get("/assets/app.js").status_code == 200
         assert client.get("/assets/styles.css").status_code == 200
-        assert client.post("/api/offer", json={"type": "bad"}).status_code == 400
+        assert client.get("/assets/account.js").status_code == 200
+        assert client.get("/interview", follow_redirects=False).status_code == 303
+        assert client.post("/api/offer", json={"type": "bad"}).status_code == 401
 
 
 @pytest.mark.asyncio

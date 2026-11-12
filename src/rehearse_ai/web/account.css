@@ -1,0 +1,35 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f7f7f5; color: #171717; line-height: 1.5; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid #111; outline-offset: 3px; }
+.brand { font-size: 1.35rem; font-weight: 700; text-decoration: none; letter-spacing: -.03em; }
+header p, .muted, .fineprint { color: #666; }
+.account-shell { width: min(100% - 2rem, 440px); margin: clamp(2rem, 8vh, 6rem) auto; }
+.account-shell header { margin-bottom: 2rem; }
+.account-shell header p { margin: .25rem 0; }
+.account-card { padding: 2rem; background: #fff; border: 1px solid #dededb; border-radius: 16px; }
+h1, h2 { margin: 0 0 .5rem; line-height: 1.2; letter-spacing: -.03em; }
+h1 { font-size: clamp(1.6rem, 3vw, 2rem); }
+h2 { font-size: 1.25rem; }
+.account-card > p { margin: .5rem 0 1.5rem; }
+form { display: grid; gap: .45rem; }
+label { font-weight: 600; margin-top: .65rem; }
+input { width: 100%; padding: .7rem .8rem; border: 1px solid #aaa; border-radius: 8px; background: #fff; }
+.primary { width: 100%; margin-top: 1.25rem; padding: .8rem 1rem; background: #171717; color: white; border: 1px solid #171717; border-radius: 8px; font-weight: 600; }
+.primary:hover { background: #333; }
+button:disabled { opacity: .55; cursor: wait; }
+nav { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem 1.15rem; margin-top: 1.5rem; font-size: .9rem; }
+nav button, #logout { padding: 0; border: 0; background: none; text-decoration: underline; }
+#message:not([hidden]) { padding: .75rem; border-radius: 8px; background: #f2f2f0; overflow-wrap: anywhere; }
+#message[data-error="true"] { border: 1px solid #9b4c4c; }
+.fineprint { font-size: .82rem; }
+.dashboard-shell { width: min(100% - 2rem, 1180px); margin: 2rem auto; }
+.dashboard-header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #dededb; padding-bottom: 1.5rem; }
+.dashboard-header p { margin: .2rem 0 0; }
+.dashboard-title { margin: 2.5rem 0 1.5rem; }
+.dashboard-title p { color: #666; margin: .45rem 0; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+@media (max-width: 640px) { .dashboard-grid { grid-template-columns: 1fr; } .account-card { padding: 1.4rem; } }

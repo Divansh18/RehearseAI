@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RehearseAI — Candidate dashboard</title>
+  <link rel="stylesheet" href="/assets/account.css?v=__BUILD_ID__">
+</head>
+<body>
+  <main class="dashboard-shell">
+    <header class="dashboard-header">
+      <div><a class="brand" href="/dashboard">RehearseAI</a><p>A little practice before it matters.</p></div>
+      <button id="logout" type="button">Log out</button>
+    </header>
+    <div class="dashboard-title"><h1>Your interviews</h1><p>Signed in as <strong id="candidate-email">Loading…</strong></p></div>
+    <div class="dashboard-grid">
+      <section class="account-card" aria-labelledby="upcoming-title">
+        <h2 id="upcoming-title">Upcoming interviews</h2>
+        <p class="muted">No interviews have been assigned yet.</p>
+      </section>
+      <section class="account-card" aria-labelledby="completed-title">
+        <h2 id="completed-title">Completed interviews</h2>
+        <p class="muted">No completed interviews are saved yet.</p>
+      </section>
+    </div>
+    <p class="fineprint">Interview scheduling and saved interview records are coming in a later milestone.</p>
+    <p id="message" role="alert" hidden></p>
+  </main>
+  <script src="/assets/account.js?v=__BUILD_ID__" defer></script>
+</body>
+</html>

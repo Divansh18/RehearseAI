@@ -5,12 +5,35 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
 
 class ConfigurationError(ValueError):
     """A required setting is missing or invalid."""
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    database_url: str = field(
+        default="postgresql+asyncpg://rehearse:rehearse_local_only@127.0.0.1:5433/rehearse_dev",
+        repr=False,
+    )
+    secret: str = field(default="test-only-secret-replace-before-serving-accounts", repr=False)
+    public_base_url: str = "http://127.0.0.1:7860"
+    environment: str = "local"
+    smtp_host: str = "127.0.0.1"
+    smtp_port: int = 1025
+    smtp_from: str = "RehearseAI <no-reply@localhost>"
+    smtp_username: str | None = field(default=None, repr=False)
+    smtp_password: str | None = field(default=None, repr=False)
+    smtp_starttls: bool = False
+    session_seconds: int = 43200
+
+    @property
+    def secure_cookie(self) -> bool:
+        return self.environment == "production"
 
 
 @dataclass(frozen=True)
@@ -33,6 +56,7 @@ class Settings:
     vad_start_secs: float = 0.2
     vad_stop_secs: float = 0.35
     turn_pause_secs: float = 1.1
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
     @classmethod
     def load(
@@ -77,6 +101,45 @@ class Settings:
         port = int(number("REHEARSE_PORT", "7860", low=1, high=65535))
         if str(port) != values.get("REHEARSE_PORT", "7860"):
             raise ConfigurationError("REHEARSE_PORT must be a whole number")
+
+        environment = values.get("REHEARSE_ENV", "local").strip().lower()
+        if environment not in {"local", "production"}:
+            raise ConfigurationError("REHEARSE_ENV must be local or production")
+        database_url = values.get("DATABASE_URL", "").strip()
+        if not database_url.startswith("postgresql+asyncpg://"):
+            raise ConfigurationError("DATABASE_URL must be a PostgreSQL asyncpg URL")
+        secret = values.get("REHEARSE_AUTH_SECRET", "")
+        if len(secret) < 32:
+            raise ConfigurationError("REHEARSE_AUTH_SECRET must contain at least 32 characters")
+        public_base_url = values.get("REHEARSE_PUBLIC_BASE_URL", "").rstrip("/")
+        parsed_base = urlparse(public_base_url)
+        if parsed_base.path or parsed_base.query or parsed_base.fragment or not parsed_base.netloc:
+            raise ConfigurationError("REHEARSE_PUBLIC_BASE_URL must be an origin without a path")
+        if environment == "local":
+            if parsed_base.scheme != "http" or parsed_base.hostname not in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }:
+                raise ConfigurationError("Local REHEARSE_PUBLIC_BASE_URL must use loopback HTTP")
+        elif parsed_base.scheme != "https":
+            raise ConfigurationError("Production REHEARSE_PUBLIC_BASE_URL must use HTTPS")
+        smtp_host = values.get("REHEARSE_SMTP_HOST", "").strip()
+        smtp_from = values.get("REHEARSE_SMTP_FROM", "").strip()
+        if not smtp_host or not smtp_from or "@" not in smtp_from:
+            raise ConfigurationError("REHEARSE_SMTP_HOST and REHEARSE_SMTP_FROM are required")
+        smtp_username = values.get("REHEARSE_SMTP_USERNAME", "").strip() or None
+        smtp_password = values.get("REHEARSE_SMTP_PASSWORD", "").strip() or None
+        if environment == "production" and (not smtp_username or not smtp_password):
+            raise ConfigurationError("Production SMTP username and password are required")
+        smtp_port = int(number("REHEARSE_SMTP_PORT", "1025", low=1, high=65535))
+        if str(smtp_port) != values.get("REHEARSE_SMTP_PORT", "1025"):
+            raise ConfigurationError("REHEARSE_SMTP_PORT must be a whole number")
+        smtp_starttls = values.get("REHEARSE_SMTP_STARTTLS", "false").lower()
+        if smtp_starttls not in {"true", "false"}:
+            raise ConfigurationError("REHEARSE_SMTP_STARTTLS must be true or false")
+        if environment == "production" and smtp_starttls != "true":
+            raise ConfigurationError("Production SMTP must use STARTTLS")
 
         model_options = {
             "REHEARSE_STT_MODEL": {"nova-3-general", "nova-3"},
@@ -155,4 +218,16 @@ class Settings:
             vad_start_secs=number("REHEARSE_VAD_START_SECS", "0.2", low=0.05, high=2.0),
             vad_stop_secs=number("REHEARSE_VAD_STOP_SECS", "0.35", low=0.1, high=2.0),
             turn_pause_secs=number("REHEARSE_TURN_PAUSE_SECS", "1.1", low=0.2, high=5.0),
+            auth=AuthConfig(
+                database_url=database_url,
+                secret=secret,
+                public_base_url=public_base_url,
+                environment=environment,
+                smtp_host=smtp_host,
+                smtp_port=smtp_port,
+                smtp_from=smtp_from,
+                smtp_username=smtp_username,
+                smtp_password=smtp_password,
+                smtp_starttls=smtp_starttls == "true",
+            ),
         )

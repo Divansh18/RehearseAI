@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RehearseAI — Candidate account</title>
+  <link rel="stylesheet" href="/assets/account.css?v=__BUILD_ID__">
+</head>
+<body>
+  <main class="account-shell">
+    <header><a class="brand" href="/">RehearseAI</a><p>A little practice before it matters.</p></header>
+    <section class="account-card" aria-labelledby="title">
+      <h1 id="title">Candidate account</h1>
+      <p id="intro" class="muted"></p>
+      <p id="message" role="status" aria-live="polite" hidden></p>
+      <form id="account-form" autocomplete="on">
+        <label id="email-label" for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+        <label id="password-label" for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button id="submit" class="primary" type="submit">Continue</button>
+      </form>
+      <nav aria-label="Account options">
+        <a href="/login">Sign in</a>
+        <a href="/signup">Create account</a>
+        <button id="resend" type="button">Resend verification</button>
+        <button id="forgot" type="button">Forgot password?</button>
+      </nav>
+    </section>
+    <p class="fineprint">Email verification confirms access to an inbox; it does not establish a person’s identity.</p>
+  </main>
+  <script src="/assets/account.js?v=__BUILD_ID__" defer></script>
+</body>
+</html>

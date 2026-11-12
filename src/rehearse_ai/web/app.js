@@ -391,8 +391,11 @@ async function startSession() {
     await waitForIce(peer);
     if (thisAttempt !== attempt) return;
     offerAbort = new AbortController();
+    const csrfResponse = await fetch('/api/csrf', { credentials: 'same-origin' });
+    if (!csrfResponse.ok) throw new Error('Could not authorize the interview connection.');
+    const csrfToken = (await csrfResponse.json()).token;
     const response = await fetch('/api/offer', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
       body: JSON.stringify({ sdp: peer.localDescription.sdp, type: peer.localDescription.type }),
       signal: offerAbort.signal,
     });
