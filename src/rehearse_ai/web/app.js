@@ -16,9 +16,14 @@ const audio = document.querySelector('#remote-audio');
 const logoutButton = document.querySelector('#logout');
 const beginButton = document.querySelector('#begin-interview');
 const resumeButton = document.querySelector('#resume');
-const setupEndButton = document.querySelector('#end-setup');
 const setupPanel = document.querySelector('#setup-panel');
 const workspace = document.querySelector('#interview-workspace');
+const aiState = document.querySelector('#ai-state');
+const aiPresence = document.querySelector('#ai-presence');
+const cameraState = document.querySelector('#camera-state');
+const screenShareState = document.querySelector('#screen-share-state');
+const mediaLossOverlay = document.querySelector('#media-loss-overlay');
+const mediaLossReason = document.querySelector('#media-loss-reason');
 let peer = null;
 let microphone = null;
 let channel = null;
@@ -81,13 +86,24 @@ function setProgress(questionNumber = 0, complete = false) {
 }
 
 function microphoneState() {
-  return microphone?.getAudioTracks().some((track) => track.readyState === 'live')
+  return [microphone, mediaSetup?.microphone].some((stream) =>
+    stream?.getAudioTracks().some((track) => track.readyState === 'live'))
     ? 'Microphone on' : 'Microphone off';
+}
+
+function updateMediaLabels() {
+  cameraState.textContent = mediaSetup?.live(mediaSetup.camera, 'video') ? 'Camera on' : 'Camera off';
+  screenShareState.textContent = mediaSetup?.live(mediaSetup.screen, 'video')
+    ? 'Sharing your screen' : 'Not sharing';
+  microphoneLabel.textContent = microphoneState();
 }
 
 function setStatus(label) {
   if (mediaPaused && !['Paused', 'Error', 'Ended', 'Finishing'].includes(label)) return;
   connectionLabel.textContent = label;
+  aiState.textContent = label;
+  aiState.dataset.state = label.toLowerCase();
+  aiPresence.dataset.state = label.toLowerCase();
   microphoneLabel.textContent = microphoneState();
   statusDot.dataset.state = label.toLowerCase();
 }
@@ -177,15 +193,15 @@ function handleEvent(message) {
   if (terminalPending || sessionClosed && attempt > 0) return;
   if (entry.event === 'media_paused') {
     mediaPaused = true;
+    mediaLossOverlay.hidden = false;
+    resumeButton.disabled = !mediaSetup?.ready();
     setStatus('Paused');
     return;
   }
   if (entry.event === 'media_resumed') {
     mediaPaused = false;
     resumeButton.hidden = true;
-    setupEndButton.hidden = true;
-    setupPanel.hidden = true;
-    workspace.hidden = false;
+    mediaLossOverlay.hidden = true;
     guidance.textContent = 'Continue when you’re ready.';
     setStatus('Listening');
     return;
@@ -197,10 +213,10 @@ function handleEvent(message) {
   } else if (entry.event === 'candidate_started') {
     if (errorLabel.hidden) setStatus('Listening');
   } else if (entry.event === 'candidate_turn_completed') {
-    if (errorLabel.hidden) setStatus('Thinking');
+    if (errorLabel.hidden) setStatus('Preparing');
   } else if (entry.event === 'agent_prepared') {
     prepared.set(entry.utterance_id, entry);
-    if (errorLabel.hidden) setStatus('Thinking');
+    if (errorLabel.hidden) setStatus('Preparing');
   } else if (entry.event === 'agent_output_started') {
     clearWarning();
     const pending = prepared.get(entry.utterance_id);
@@ -302,7 +318,7 @@ function finishSession({ manual = false } = {}) {
   startButton.textContent = 'Start again';
   endButton.disabled = true;
   resumeButton.hidden = true;
-  setupEndButton.hidden = true;
+  mediaLossOverlay.hidden = true;
   beginButton.hidden = false;
   setupPanel.hidden = true;
   workspace.hidden = false;
@@ -326,15 +342,16 @@ function sendMediaAction(action, reason) {
 }
 
 function mediaLost(kind) {
-  if (sessionClosed || terminalPending || mediaPaused) return;
+  if (sessionClosed || terminalPending) return;
+  if (mediaPaused) {
+    mediaLossReason.textContent = 'Restore all required media, then choose Resume interview.';
+    return;
+  }
   mediaPaused = true;
   guidance.textContent = `${kind} stopped. Restore it, then choose Resume interview.`;
-  document.querySelector('#setup-message').textContent = `${kind} stopped. Restore it, then choose Resume interview.`;
-  setupPanel.hidden = false;
-  workspace.hidden = true;
-  beginButton.hidden = true;
+  mediaLossReason.textContent = `${kind} stopped. Restore it, then choose Resume interview.`;
+  mediaLossOverlay.hidden = false;
   resumeButton.hidden = false;
-  setupEndButton.hidden = false;
   resumeButton.disabled = true;
   setStatus('Paused');
   // Before Begin, readiness alone blocks the greeting; there is no server turn to pause.
@@ -357,7 +374,7 @@ async function resumeInterview() {
     microphone = mediaSetup.microphone;
   }
   if (!channel || channel.readyState !== 'open') {
-    document.querySelector('#setup-message').textContent = 'Voice connection is not ready. Wait a moment and try Resume, or end the interview.';
+    mediaLossReason.textContent = 'Voice connection is not ready. Wait a moment and try Resume, or end the interview.';
     resumeButton.disabled = false;
     return;
   }
@@ -368,10 +385,7 @@ async function resumeInterview() {
     beginSent = sendMediaAction('begin');
     mediaPaused = false;
     resumeButton.hidden = true;
-    setupEndButton.hidden = true;
-    beginButton.hidden = false;
-    setupPanel.hidden = true;
-    workspace.hidden = false;
+    mediaLossOverlay.hidden = true;
     guidance.textContent = 'Continue when you’re ready.';
     setStatus('Listening');
   }
@@ -382,6 +396,7 @@ function showSetup() {
   setupPanel.hidden = false;
   workspace.hidden = true;
   beginButton.hidden = false;
+  mediaLossOverlay.hidden = true;
   startButton.hidden = true;
   endButton.disabled = true;
   setStatus('Ready');
@@ -444,7 +459,8 @@ async function startSession() {
   endButton.disabled = false;
   setupPanel.hidden = true;
   workspace.hidden = false;
-  setupEndButton.hidden = true;
+  mediaSetup.showRoomPreviews();
+  mediaLossOverlay.hidden = true;
   resumeButton.hidden = true;
   beginButton.hidden = false;
   setStatus('Connecting');
@@ -529,7 +545,6 @@ startButton.addEventListener('click', showSetup);
 beginButton.addEventListener('click', startSession);
 resumeButton.addEventListener('click', resumeInterview);
 endButton.addEventListener('click', endSession);
-setupEndButton.addEventListener('click', endSession);
 logoutButton.addEventListener('click', async () => {
   endSession();
   mediaSetup?.cleanup();
@@ -551,6 +566,7 @@ window.addEventListener('DOMContentLoaded', () => {
     onChange: (ready) => {
       beginButton.disabled = !ready || !sessionClosed;
       if (mediaPaused) resumeButton.disabled = !ready;
+      updateMediaLabels();
     },
     onLoss: mediaLost,
   });
@@ -561,6 +577,8 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelector('#share-screen').addEventListener('click', () => mediaSetup.shareScreen());
   document.querySelector('#test-speaker').addEventListener('click', () => mediaSetup.testSpeaker());
   document.querySelector('#confirm-speaker').addEventListener('click', () => mediaSetup.confirmSpeaker());
+  document.querySelector('#restore-devices').addEventListener('click', () => mediaSetup.enableDevices());
+  document.querySelector('#restore-screen').addEventListener('click', () => mediaSetup.shareScreen());
   document.querySelector('#cancel-setup').addEventListener('click', () => mediaSetup.cleanup());
   checkAccount().catch((error) => showError(error.message));
 });

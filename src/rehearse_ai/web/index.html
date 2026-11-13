@@ -37,45 +37,25 @@
           <div class="setup-tool"><button id="enable-devices" class="secondary" type="button">Enable camera and microphone</button><label for="mic-level">Microphone input level</label><meter id="mic-level" min="0" max="1" value="0">0</meter></div>
           <div class="setup-tool"><button id="share-screen" class="secondary" type="button">Share screen</button><button id="test-speaker" class="secondary" type="button">Test speaker</button><button id="confirm-speaker" class="secondary" type="button" disabled>I heard the tone</button></div>
         </div>
-        <div class="setup-bottom"><div><h2>Readiness</h2><ul class="readiness-list"><li id="check-microphone">Microphone <span>Needed</span></li><li id="check-camera">Camera preview <span>Needed</span></li><li id="check-screen">Screen preview <span>Needed</span></li><li id="check-speaker">Speaker test <span>Needed</span></li></ul><p id="setup-message" class="setup-message" role="status" aria-live="polite">Use the controls above to check your devices.</p></div><div class="setup-actions"><button id="begin-interview" class="primary" type="button" disabled>Begin interview</button><button id="resume" class="primary" type="button" hidden>Resume interview</button><button id="end-setup" class="danger" type="button" hidden>End interview</button></div></div>
+        <div class="setup-bottom"><div><h2>Readiness</h2><ul class="readiness-list"><li id="check-microphone">Microphone <span>Needed</span></li><li id="check-camera">Camera preview <span>Needed</span></li><li id="check-screen">Screen preview <span>Needed</span></li><li id="check-speaker">Speaker test <span>Needed</span></li></ul><p id="setup-message" class="setup-message" role="status" aria-live="polite">Use the controls above to check your devices.</p></div><div class="setup-actions"><button id="begin-interview" class="primary" type="button" disabled>Begin interview</button></div></div>
       </section>
 
-      <div id="interview-workspace" class="content-grid" hidden>
-        <section class="card interview-card" aria-labelledby="interview-heading">
-          <div class="room-identity" aria-hidden="true"><span class="room-mark">R</span><span><strong>RehearseAI</strong><small>AI interviewer</small></span></div>
-          <div class="card-heading">
-            <div><span class="eyebrow">Interview stage</span><h2 id="interview-heading">Your interview</h2></div>
-            <span id="question-count" class="progress" hidden>01 / 04</span>
-          </div>
-          <div id="question-progress" class="progress-track" role="img" aria-label="Interview has not started">
-            <span></span><span></span><span></span><span></span>
-          </div>
-          <div class="interview-content">
-            <p id="phase-label" class="phase-label">Before you begin</p>
-            <p id="question" class="question" aria-live="polite">Four questions about your project, followed by short feedback.</p>
-          </div>
-          <p id="guidance" class="guidance">Take a moment to find a project you’d like to talk about.</p>
-          <div class="interview-footer">
-            <div class="controls">
-              <button id="start" class="primary" type="button" hidden>Start again</button>
-              <button id="end" class="danger" type="button" disabled>End interview</button>
-            </div>
-            <p class="disclosure">The coach’s voice is AI-generated. Allow microphone access when prompted.</p>
-          </div>
-        </section>
+      <div id="interview-workspace" class="room-workspace" hidden>
+        <div class="room-stage">
+          <section class="card candidate-stage" aria-labelledby="candidate-heading">
+            <div class="stage-heading"><div><span class="eyebrow">Your view</span><h2 id="candidate-heading">You</h2></div><span id="camera-state" class="stage-state">Camera off</span></div>
+            <div class="self-view"><video id="room-camera-preview" autoplay muted playsinline aria-label="Mirrored local camera preview"></video><div id="media-loss-overlay" class="media-loss-overlay" hidden><h3>Interview paused</h3><p id="media-loss-reason">Restore your media to continue.</p><div class="restore-actions"><button id="restore-devices" class="secondary" type="button">Restore camera or microphone</button><button id="restore-screen" class="secondary" type="button">Share screen again</button><button id="resume" class="primary" type="button" disabled>Resume interview</button></div></div></div>
+            <div class="screen-strip"><div><span class="eyebrow">Screen</span><p id="screen-share-state" role="status">Not sharing</p></div><video id="room-screen-preview" autoplay muted playsinline aria-label="Local shared screen preview"></video></div>
+          </section>
 
-        <section class="card conversation-card" aria-labelledby="transcript-heading">
-          <div class="card-heading">
-            <h2 id="transcript-heading">Conversation</h2>
-            <span class="card-caption">Live transcript</span>
-          </div>
-          <ol id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript" aria-live="polite" aria-relevant="additions text">
-            <li class="empty">Your conversation will appear here when you begin.</li>
-          </ol>
-          <div class="conversation-footer">
-            <button id="jump-latest" class="jump-latest" type="button" hidden>Latest messages</button>
-          </div>
-        </section>
+          <section class="card ai-stage" aria-labelledby="interview-heading">
+            <div class="stage-heading"><div><span class="eyebrow">Interviewer</span><h2 id="interview-heading">RehearseAI</h2></div><span id="ai-state" class="stage-state" role="status">Ready</span></div>
+            <div id="ai-presence" class="ai-presence" data-state="ready" aria-hidden="true"><span class="ai-emblem">R</span><span class="speaking-bars"><i></i><i></i><i></i><i></i><i></i></span></div>
+            <div class="question-panel"><div class="question-heading"><p id="phase-label" class="phase-label">Before you begin</p><span id="question-count" class="progress" hidden>01 / 04</span></div><p id="question" class="question" aria-live="polite">Four questions about your project, followed by short feedback.</p><p id="guidance" class="guidance">Take a moment to find a project you’d like to talk about.</p><div id="question-progress" class="progress-track" role="img" aria-label="Interview has not started"><span></span><span></span><span></span><span></span></div></div>
+          </section>
+        </div>
+        <div class="room-toolbar"><p class="disclosure">AI-generated voice · Camera and screen previews stay on this device.</p><div class="controls"><button id="start" class="primary" type="button" hidden>Start again</button><button id="end" class="danger" type="button" disabled>End interview</button></div></div>
+        <details id="conversation-panel" class="conversation-panel"><summary>Conversation <span>Live transcript</span></summary><section class="card conversation-card" aria-labelledby="transcript-heading"><h2 id="transcript-heading" class="visually-hidden">Conversation transcript</h2><ol id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript" aria-live="polite" aria-relevant="additions text"><li class="empty">Your conversation will appear here when you begin.</li></ol><div class="conversation-footer"><button id="jump-latest" class="jump-latest" type="button" hidden>Latest messages</button></div></section></details>
       </div>
 
       <p id="error" class="error" role="alert" hidden></p>

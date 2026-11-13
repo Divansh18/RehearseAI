@@ -15,6 +15,8 @@ class RehearseMediaSetup {
     this.speakerContext = null;
     this.cameraPreview = document.querySelector('#camera-preview');
     this.screenPreview = document.querySelector('#screen-preview');
+    this.roomCameraPreview = document.querySelector('#room-camera-preview');
+    this.roomScreenPreview = document.querySelector('#room-screen-preview');
     this.level = document.querySelector('#mic-level');
     this.message = document.querySelector('#setup-message');
     for (const preview of [this.cameraPreview, this.screenPreview]) {
@@ -32,18 +34,23 @@ class RehearseMediaSetup {
     return !!stream?.getTracks().some((track) => track.kind === kind && track.readyState === 'live');
   }
 
+  previewReady(stream, previews) {
+    return this.live(stream, 'video')
+      && previews.some((preview) => preview.srcObject === stream && preview.readyState >= 2);
+  }
+
   ready() {
     return this.supported() && this.live(this.microphone, 'audio')
-      && this.live(this.camera, 'video') && this.cameraPreview.readyState >= 2
-      && this.live(this.screen, 'video') && this.screenPreview.readyState >= 2
+      && this.previewReady(this.camera, [this.cameraPreview, this.roomCameraPreview])
+      && this.previewReady(this.screen, [this.screenPreview, this.roomScreenPreview])
       && this.speakerTested;
   }
 
   update() {
     const checks = {
       microphone: this.live(this.microphone, 'audio'),
-      camera: this.live(this.camera, 'video') && this.cameraPreview.readyState >= 2,
-      screen: this.live(this.screen, 'video') && this.screenPreview.readyState >= 2,
+      camera: this.previewReady(this.camera, [this.cameraPreview, this.roomCameraPreview]),
+      screen: this.previewReady(this.screen, [this.screenPreview, this.roomScreenPreview]),
       speaker: this.speakerTested,
     };
     for (const [name, passed] of Object.entries(checks)) {
@@ -77,6 +84,16 @@ class RehearseMediaSetup {
     }
   }
 
+  attachPreview(preview, stream) {
+    if (preview.srcObject !== stream) preview.srcObject = stream;
+    if (stream) preview.play().catch(() => {});
+  }
+
+  showRoomPreviews() {
+    this.attachPreview(this.roomCameraPreview, this.camera);
+    this.attachPreview(this.roomScreenPreview, this.screen);
+  }
+
   async enableDevices() {
     if (this.requestingDevices) return;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -107,8 +124,8 @@ class RehearseMediaSetup {
         this.camera?.getVideoTracks().forEach((track) => track.stop());
         this.camera = new MediaStream(stream.getVideoTracks());
         this.watch(this.camera, 'Camera');
-        this.cameraPreview.srcObject = this.camera;
-        this.cameraPreview.play().catch(() => {});
+        this.attachPreview(this.cameraPreview, this.camera);
+        this.attachPreview(this.roomCameraPreview, this.camera);
       }
       this.message.textContent = 'Camera and microphone are previewed locally.';
       this.update();
@@ -134,8 +151,8 @@ class RehearseMediaSetup {
       }
       this.screen?.getTracks().forEach((track) => track.stop());
       this.screen = stream;
-      this.screenPreview.srcObject = stream;
-      this.screenPreview.play().catch(() => {});
+      this.attachPreview(this.screenPreview, stream);
+      this.attachPreview(this.roomScreenPreview, stream);
       this.watch(stream, 'Screen sharing');
       this.message.textContent = 'Shared screen is previewed only in this browser.';
       this.update();
@@ -214,6 +231,8 @@ class RehearseMediaSetup {
     this.level.value = 0;
     this.cameraPreview.srcObject = null;
     this.screenPreview.srcObject = null;
+    this.roomCameraPreview.srcObject = null;
+    this.roomScreenPreview.srcObject = null;
     this.speakerTested = false;
     this.speakerTonePlayed = false;
     document.querySelector('#confirm-speaker').disabled = true;

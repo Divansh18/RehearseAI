@@ -64,7 +64,10 @@ function fixture({ active = true, fetchResponse } = {}) {
   const ids = ['start', 'end', 'connection', 'microphone', 'status-dot', 'phase-label',
     'question', 'question-count', 'question-progress', 'guidance', 'transcript',
     'jump-latest', 'elapsed', 'error', 'remote-audio', 'session-id',
-    'admin-link', 'logout', 'end-setup'];
+    'admin-link', 'logout', 'ai-state', 'ai-presence', 'camera-state',
+    'screen-share-state', 'media-loss-overlay', 'media-loss-reason',
+    'room-camera-preview', 'room-screen-preview', 'restore-devices',
+    'restore-screen', 'conversation-panel'];
   ids.push('begin-interview', 'resume', 'setup-panel', 'interview-workspace',
     'camera-preview', 'screen-preview', 'mic-level', 'setup-message',
     'enable-devices', 'share-screen', 'test-speaker', 'confirm-speaker', 'cancel-setup',
@@ -75,8 +78,11 @@ function fixture({ active = true, fetchResponse } = {}) {
   nodes['jump-latest'].hidden = true;
   nodes['admin-link'].hidden = true;
   nodes.error.hidden = true;
+  nodes['media-loss-overlay'].hidden = true;
+  nodes['interview-workspace'].hidden = !active;
+  nodes['setup-panel'].hidden = active;
   nodes.start.disabled = false;
-  nodes.end.disabled = true;
+  nodes.end.disabled = !active;
   for (const name of ['microphone', 'camera', 'screen', 'speaker']) {
     nodes[`check-${name}`].append(new Element('span'));
   }
@@ -106,6 +112,7 @@ function fixture({ active = true, fetchResponse } = {}) {
     fetch: fetchResponse || (async () => ({
       ok: true, status: 200, json: async () => ({ role: 'candidate' }),
     })),
+    AbortController,
     setTimeout: (fn) => { const id = nextTimer++; timeouts.set(id, fn); return id; },
     clearTimeout: (id) => timeouts.delete(id),
     setInterval: (fn) => { const id = nextTimer++; intervals.set(id, fn); return id; },
@@ -132,15 +139,18 @@ test('queued speech stays out of transcript; output, interruption, and candidate
   send({ event: 'agent_prepared', utterance_id: 1, utterance_kind: 'greeting', text: 'Hello.' });
   assert.equal(nodes.transcript.children.length, 1);
   assert.equal(nodes['question-count'].hidden, true);
-  assert.equal(nodes.connection.textContent, 'Thinking');
+  assert.equal(nodes.connection.textContent, 'Preparing');
+  assert.equal(nodes['ai-state'].textContent, 'Preparing');
   send({ event: 'agent_output_started', utterance_id: 1 });
   assert.equal(nodes.transcript.children[0].querySelector('.speaker').textContent, 'RehearseAI');
   assert.equal(nodes.transcript.children[0].children[0].className, 'message');
   assert.equal(nodes.transcript.children[0].children[0].children[0].className, 'speaker');
   assert.equal(nodes.connection.textContent, 'Speaking');
+  assert.equal(nodes['ai-presence'].dataset.state, 'speaking');
   send({ event: 'agent_interrupted', utterance_id: 1 });
   assert.equal(nodes.transcript.children[0].querySelector('.annotation').textContent, 'Interrupted');
   assert.equal(nodes.connection.textContent, 'Listening');
+  assert.equal(nodes['ai-presence'].dataset.state, 'listening');
   send({ event: 'agent_prepared', utterance_id: 2, utterance_kind: 'question', question_number: 1, text: 'Tell me about a project.' });
   send({ event: 'agent_output_started', utterance_id: 2 });
   assert.equal(nodes['question-count'].hidden, false);
@@ -225,7 +235,7 @@ test('two Begin clicks cannot create duplicate connection attempts', async () =>
     requests += 1;
     return new Promise((resolve) => { resolveAccount = resolve; });
   } });
-  vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, cleanup: () => {} };', context);
+  vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
   const first = context.startSession();
   const second = context.startSession();
   assert.equal(requests, 1);
@@ -238,7 +248,7 @@ test('expired account redirects before microphone access or WebRTC setup', async
     active: false,
     fetchResponse: async () => ({ ok: false, status: 401 }),
   });
-  vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, cleanup: () => {} };', context);
+  vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
   await context.startSession();
   assert.equal(context.location.assigned, '/login?reason=expired');
   assert.equal(nodes.end.disabled, true);
@@ -353,12 +363,91 @@ test('setup checks live tracks and preview frames; silent mic remains valid', as
   nodes['screen-preview'].readyState = 2;
   setup.update();
   assert.equal(setup.ready(), true);
+  assert.equal(nodes['room-camera-preview'].srcObject, setup.camera);
+  assert.equal(nodes['room-screen-preview'].srcObject, setup.screen);
   assert.equal(nodes['mic-level'].value || 0, 0);
   camera.end();
   assert.equal(setup.ready(), false);
   setup.cleanup();
   assert.equal(mic.readyState, 'ended');
   assert.equal(screen.readyState, 'ended');
+  assert.equal(nodes['room-camera-preview'].srcObject, null);
+  assert.equal(nodes['room-screen-preview'].srcObject, null);
+});
+
+test('Begin keeps the existing camera and screen streams in the room and sends only microphone audio', async () => {
+  let deviceRequests = 0;
+  let screenRequests = 0;
+  let peer;
+  let channel;
+  const signals = [];
+  const { nodes, context } = fixture({ active: false, fetchResponse: async (url) => {
+    if (url === '/api/auth/me') return { ok: true, status: 200, json: async () => ({ role: 'candidate' }) };
+    if (url === '/api/csrf') return { ok: true, json: async () => ({ token: 'synthetic' }) };
+    if (url === '/api/offer') return { ok: true, status: 200, json: async () => ({ type: 'answer', sdp: 'synthetic' }) };
+    throw new Error(`Unexpected request: ${url}`);
+  } });
+  const mic = fakeTrack('audio');
+  const camera = fakeTrack('video');
+  const screen = fakeTrack('video');
+  context.navigator.mediaDevices = {
+    getUserMedia: async () => { deviceRequests += 1; return new context.MediaStream([mic, camera]); },
+    getDisplayMedia: async () => { screenRequests += 1; return new context.MediaStream([screen]); },
+  };
+  context.RTCPeerConnection = class {
+    constructor() { this.iceGatheringState = 'complete'; this.added = []; peer = this; }
+    addTrack(track) { this.added.push(track); }
+    createDataChannel() {
+      channel = { readyState: 'open', send(value) { signals.push(JSON.parse(value)); }, close() {} };
+      return channel;
+    }
+    async createOffer() { return { type: 'offer', sdp: 'synthetic' }; }
+    async setLocalDescription(description) { this.localDescription = description; }
+    async setRemoteDescription() {}
+    close() {}
+  };
+  const setup = new context.window.RehearseMediaSetup({ onChange() {}, onLoss() {} });
+  await setup.enableDevices();
+  await setup.shareScreen();
+  nodes['camera-preview'].readyState = 2;
+  nodes['screen-preview'].readyState = 2;
+  setup.speakerTonePlayed = true;
+  setup.confirmSpeaker();
+  context.syntheticSetup = setup;
+  vm.runInContext('mediaSetup = syntheticSetup;', context);
+  setup.update();
+  context.updateMediaLabels();
+  assert.equal(setup.ready(), true);
+  await context.startSession();
+  channel.onopen();
+  assert.equal(deviceRequests, 1);
+  assert.equal(screenRequests, 1);
+  assert.equal(nodes['setup-panel'].hidden, true);
+  assert.equal(nodes['interview-workspace'].hidden, false);
+  assert.equal(nodes['room-camera-preview'].srcObject, setup.camera);
+  assert.equal(nodes['room-screen-preview'].srcObject, setup.screen);
+  assert.deepEqual(peer.added, [mic]);
+  assert.equal(signals[0].action, 'begin');
+  assert.equal(nodes['camera-state'].textContent, 'Camera on');
+  assert.equal(nodes['screen-share-state'].textContent, 'Sharing your screen');
+  context.endSession();
+  assert.equal(mic.readyState, 'ended');
+  assert.equal(camera.readyState, 'ended');
+  assert.equal(screen.readyState, 'ended');
+  assert.equal(nodes['room-camera-preview'].srcObject, null);
+});
+
+test('collapsing conversation retains messages and scroll position', () => {
+  const { nodes, send } = fixture();
+  nodes['conversation-panel'].open = true;
+  send({ event: 'candidate_final', answer_number: 1, text: 'First answer.' });
+  nodes.transcript.scrollTop = 80;
+  nodes['conversation-panel'].open = false;
+  send({ event: 'candidate_final', answer_number: 2, text: 'Second answer.' });
+  assert.equal(nodes.transcript.children.length, 2);
+  assert.equal(nodes.transcript.scrollTop, 80);
+  nodes['conversation-panel'].open = true;
+  assert.match(nodes.transcript.children[1].textContent, /Second answer/);
 });
 
 test('permission denial and cancelled screen picker leave setup blocked', async () => {
@@ -421,9 +510,10 @@ test('track loss pauses once; explicit resume requires restored readiness', asyn
   context.mediaLost('Screen sharing');
   context.mediaLost('Camera');
   assert.equal(nodes.connection.textContent, 'Paused');
-  assert.equal(nodes['setup-panel'].hidden, false);
-  assert.equal(nodes['interview-workspace'].hidden, true);
-  assert.equal(nodes['end-setup'].hidden, false);
+  assert.equal(nodes['setup-panel'].hidden, true);
+  assert.equal(nodes['interview-workspace'].hidden, false);
+  assert.equal(nodes['media-loss-overlay'].hidden, false);
+  assert.equal(nodes.end.disabled, false);
   assert.equal(nodes.resume.hidden, false);
   assert.equal(signals.length, 0);
   await context.resumeInterview();
@@ -432,7 +522,7 @@ test('track loss pauses once; explicit resume requires restored readiness', asyn
   await context.resumeInterview();
   assert.equal(signals[0].action, 'begin');
   assert.equal(nodes.connection.textContent, 'Listening');
-  assert.equal(nodes['setup-panel'].hidden, true);
+  assert.equal(nodes['media-loss-overlay'].hidden, true);
   context.mediaLost('Camera');
   assert.equal(signals[1].action, 'pause');
   vm.runInContext('mediaSetup.ready = () => true;', context);
@@ -441,18 +531,18 @@ test('track loss pauses once; explicit resume requires restored readiness', asyn
   assert.equal(nodes.connection.textContent, 'Paused');
   context.handleEvent({ type: 'rehearseai', event: { event: 'media_resumed' } });
   assert.equal(nodes.connection.textContent, 'Listening');
-  assert.equal(nodes['setup-panel'].hidden, true);
+  assert.equal(nodes['media-loss-overlay'].hidden, true);
   context.endSession();
   assert.equal(nodes.connection.textContent, 'Ended');
   assert.equal(nodes.resume.hidden, true);
 });
 
-test('End remains available while the restore panel is open', () => {
+test('End remains available while the media-loss overlay is open', () => {
   const { nodes, context } = fixture();
   context.mediaLost('Microphone');
-  nodes['end-setup'].onclick();
+  nodes.end.onclick();
   assert.equal(nodes.connection.textContent, 'Ended');
-  assert.equal(nodes['setup-panel'].hidden, true);
+  assert.equal(nodes['media-loss-overlay'].hidden, true);
   assert.equal(nodes['interview-workspace'].hidden, false);
   assert.equal(nodes.start.hidden, false);
 });
