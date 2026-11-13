@@ -13,9 +13,6 @@ const elapsed = document.querySelector('#elapsed');
 const progressTrack = document.querySelector('#question-progress');
 const errorLabel = document.querySelector('#error');
 const audio = document.querySelector('#remote-audio');
-const nameInput = document.querySelector('#candidate-name');
-const nameStatus = document.querySelector('#name-status');
-const confirmNameButton = document.querySelector('#confirm-name');
 const logoutButton = document.querySelector('#logout');
 let peer = null;
 let microphone = null;
@@ -173,10 +170,6 @@ function handleEvent(message) {
   if (entry.event === 'session_started') {
     document.querySelector('#session-id').textContent = `Session ${entry.session_id}`;
     startTimer();
-  } else if (entry.event === 'memory_updated' && entry.field === 'candidate_name') {
-    if (document.activeElement !== nameInput) nameInput.value = entry.value || '';
-    nameStatus.textContent = entry.confirmed ? 'Confirmed for this session' : 'Heard from speech · confirm spelling';
-    confirmNameButton.disabled = false;
   } else if (entry.event === 'candidate_started') {
     if (errorLabel.hidden) setStatus('Listening');
   } else if (entry.event === 'candidate_turn_completed') {
@@ -280,7 +273,6 @@ function finishSession({ manual = false } = {}) {
   startButton.disabled = false;
   startButton.textContent = 'Start again';
   endButton.disabled = true;
-  confirmNameButton.disabled = true;
   if (manual) {
     setInterviewPhase('Ended', 'Session ended.');
     questionCount.hidden = true;
@@ -336,9 +328,6 @@ async function startSession() {
   utterances.clear();
   prepared.clear();
   answers.clear();
-  nameInput.value = '';
-  nameStatus.textContent = 'Optional';
-  confirmNameButton.disabled = true;
   jumpLatest.hidden = true;
   document.querySelector('#session-id').textContent = 'Connecting to a session';
   setInterviewPhase('Opening', 'We’ll start with a quick hello.', 'Allow microphone access when prompted.');
@@ -373,9 +362,6 @@ async function startSession() {
     microphone.getAudioTracks().forEach((track) => peer.addTrack(track, microphone));
     channel = peer.createDataChannel('rehearseai');
     const activeChannel = channel;
-    channel.onopen = () => {
-      if (thisAttempt === attempt) confirmNameButton.disabled = false;
-    };
     channel.onmessage = (event) => {
       if (thisAttempt !== attempt) return;
       try { handleEvent(JSON.parse(event.data)); } catch { /* Ignore unrelated data. */ }
@@ -439,19 +425,6 @@ async function startSession() {
 
 startButton.addEventListener('click', startSession);
 endButton.addEventListener('click', endSession);
-confirmNameButton.addEventListener('click', () => {
-  const name = nameInput.value.trim();
-  if (sessionClosed || terminalPending || channel?.readyState !== 'open') {
-    nameStatus.textContent = 'Connect the session to confirm your name.';
-    return;
-  }
-  if (!name || name.length > 40 || !/^[\p{L}]+(?:\s+[\p{L}]+)*$/u.test(name)) {
-    nameStatus.textContent = 'Use a short name with letters only.';
-    return;
-  }
-  channel.send(JSON.stringify({ type: 'confirm_name', name }));
-  nameStatus.textContent = 'Saving…';
-});
 logoutButton.addEventListener('click', async () => {
   endSession();
   try {

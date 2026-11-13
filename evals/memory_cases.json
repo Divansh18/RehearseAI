@@ -1,7 +1,8 @@
 {
   "description": "Invented text cases for the first session-memory milestone. Expected behavior is semantic, not an exact sentence.",
   "cases": [
-    {"id": "name_misheard_manual", "turns": ["My name is Mia."], "manual_name": "Maya", "expect": ["speech name remains tentative", "manual spelling becomes confirmed", "later STT variants do not overwrite it"]},
+    {"id": "name_misheard_spelled", "turns": ["My name is Mia.", "My name is spelled M A Y A."], "expect": ["heard name remains tentative", "explicit spoken spelling confirms Maya", "later STT variants do not overwrite it", "raw transcription remains unchanged"]},
+    {"id": "unfamiliar_name_unclear", "turns": ["I'm Aadhya.", "Sorry, what?", "I spell my name A A D H Y A."], "expect": ["one short name clarification if needed", "spelling confirms Aadhya", "opening proceeds without a loop"]},
     {"id": "spoken_name_correction", "turns": ["My name is Mia.", "It's Maya, not Mia."], "expect": ["name is Maya and confirmed", "question and probe allowance are unchanged"]},
     {"id": "technical_term_correction", "turns": ["I used web books to receive GitHub events.", "I said webhooks, not web books."], "expect": ["current fact uses webhooks", "raw STT remains unchanged", "correction history retains old value"]},
     {"id": "correction_and_answer", "turns": ["Actually, I used MySQL, not PostgreSQL. I built the webhook handler myself."], "expect": ["technology correction is stored", "new answer content is processed once"]},

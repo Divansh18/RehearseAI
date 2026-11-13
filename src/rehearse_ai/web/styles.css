@@ -38,12 +38,6 @@ button:disabled { opacity: .42; cursor: not-allowed; }
 .question { margin: 0; max-width: 440px; font-size: clamp(21px, 2vw, 28px); font-weight: 570; line-height: 1.33; letter-spacing: -.03em; overflow-wrap: anywhere; }
 .guidance { flex: none; margin: 12px 0 0; color: #686868; font-size: 13px; line-height: 1.55; }
 .interview-footer { flex: none; margin-top: auto; padding-top: 20px; }
-.name-edit { margin: 0 0 15px; }
-.name-edit label { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; color: #303030; font-size: 12px; font-weight: 620; }
-#name-status { color: #686868; font-weight: 450; text-align: right; }
-.name-controls { display: flex; gap: 8px; }
-.name-controls input { min-width: 0; flex: 1; padding: 8px 10px; border: 1px solid #cdcdca; border-radius: 7px; background: #fff; color: #1b1b1b; font: inherit; font-size: 13px; }
-.name-controls button { min-height: 36px; padding: 7px 11px; }
 .controls { display: flex; flex-wrap: wrap; gap: 10px; }
 .primary, .secondary { min-height: 43px; padding: 10px 16px; border-radius: 7px; font-size: 13px; font-weight: 640; }
 .primary { color: #fff; background: #1b1b1b; border: 1px solid #1b1b1b; }

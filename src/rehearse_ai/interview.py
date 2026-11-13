@@ -381,6 +381,25 @@ class InterviewController:
             self._question_index if self._name_detour else None,
         )
 
+    def clarify_name(self) -> Utterance:
+        self._require(Stage.AWAITING_NAME)
+        self._name_repeats += 1
+        if self._name_repeats > 1:
+            return self.submit_name(None, Readiness.UNCLEAR)
+        return self._prepare(
+            UtteranceKind.NAME_PROMPT,
+            "Sorry, I didn't catch your name. Could you say it once more, or spell it?",
+            self._question_index if self._name_detour else None,
+        )
+
+    def acknowledge_spelled_name(self, name: str) -> Utterance:
+        self._require(Stage.AWAITING_READINESS)
+        return self._prepare(
+            UtteranceKind.READINESS,
+            f"Thanks, I'll call you {name}. {READINESS_PROMPT}",
+            None,
+        )
+
     def skip_name_for_start(self) -> Utterance:
         self._require(Stage.AWAITING_NAME)
         self._name_declined = True

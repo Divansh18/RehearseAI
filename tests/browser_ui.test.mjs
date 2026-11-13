@@ -59,7 +59,7 @@ function fixture({ active = true, fetchResponse } = {}) {
   const ids = ['start', 'end', 'connection', 'microphone', 'status-dot', 'phase-label',
     'question', 'question-count', 'question-progress', 'guidance', 'transcript',
     'jump-latest', 'elapsed', 'error', 'remote-audio', 'session-id',
-    'candidate-name', 'name-status', 'confirm-name', 'admin-link', 'logout'];
+    'admin-link', 'logout'];
   const nodes = Object.fromEntries(ids.map((id) => [id, new Element()]));
   for (let i = 0; i < 4; i += 1) nodes['question-progress'].append(new Element('span'));
   nodes['question-count'].hidden = true;
@@ -253,23 +253,6 @@ test('End session releases tracks and connections immediately', () => {
   assert.equal(nodes.start.disabled, false);
   assert.equal(nodes.end.disabled, true);
   assert.equal(nodes.start.textContent, 'Start again');
-});
-
-test('heard names stay tentative until the browser sends an explicit confirmation', () => {
-  const { nodes, context, send } = fixture();
-  const messages = [];
-  context.fakeChannel = { readyState: 'open', send: (value) => messages.push(JSON.parse(value)), close() {} };
-  vm.runInContext('channel = fakeChannel;', context);
-  send({ event: 'memory_updated', field: 'candidate_name', value: 'Devanj', confirmed: false });
-  assert.equal(nodes['candidate-name'].value, 'Devanj');
-  assert.match(nodes['name-status'].textContent, /Heard from speech/);
-  nodes['candidate-name'].value = 'Divansh';
-  nodes['confirm-name'].onclick();
-  assert.deepEqual(messages, [{ type: 'confirm_name', name: 'Divansh' }]);
-  send({ event: 'memory_updated', field: 'candidate_name', value: 'Divansh', confirmed: true });
-  assert.match(nodes['name-status'].textContent, /Confirmed/);
-  context.endSession();
-  assert.equal(nodes['confirm-name'].disabled, true);
 });
 
 test('closing feedback drains before automatic cleanup, then freezes timer and preserves transcript', () => {

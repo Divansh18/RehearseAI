@@ -338,13 +338,6 @@ class LiveSession:
         async def disconnected(_transport: SmallWebRTCTransport, _client: Any) -> None:
             await self.stop()
 
-        @transport.event_handler("on_app_message")
-        async def app_message(_transport: SmallWebRTCTransport, message: Any, _sender: str) -> None:
-            if isinstance(message, dict) and message.get("type") == "confirm_name":
-                name = message.get("name")
-                if isinstance(name, str):
-                    await self.session.confirm_name(name)
-
     async def run(self) -> None:
         failed = False
         try:

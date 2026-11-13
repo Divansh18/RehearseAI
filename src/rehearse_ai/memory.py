@@ -68,9 +68,7 @@ class SessionMemory:
         if previous and not correction:
             if previous.value.casefold() == value.casefold():
                 if confirmed and not previous.confirmed:
-                    fact = Fact(
-                        previous.value, previous.source_turn, previous.supplied_wording, True
-                    )
+                    fact = Fact(previous.value, source_turn, supplied_wording, True)
                     self.facts[field_name] = fact
                     return fact
                 return previous

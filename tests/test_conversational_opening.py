@@ -88,6 +88,75 @@ async def test_full_name_opening_routes_to_first_question(tmp_path):
     await session.close()
 
 
+@pytest.mark.asyncio
+async def test_unfamiliar_spoken_name_stays_tentative_until_spelled(tmp_path):
+    session, adapter, spoken, _calls, log = make_session(tmp_path)
+    await session.start()
+    deliver(session)
+    await turn(adapter, "I'm Zareen, doing well.")
+    await settle()
+    name = session.controller.memory.get("candidate_name")
+    assert name.value == "Zareen" and not name.confirmed
+    deliver(session)
+    await turn(adapter, "My name is spelled Z A R E E N.")
+    name = session.controller.memory.get("candidate_name")
+    assert name.value == "Zareen" and name.confirmed
+    assert name.supplied_wording == "My name is spelled Z A R E E N."
+    assert spoken[-1].kind is UtteranceKind.READINESS
+    assert session.controller.answers == ((), (), (), ())
+    await session.close()
+    events = [json.loads(line) for line in log.path.read_text().splitlines()]
+    assert any(
+        e.get("event") == "candidate_final" and e.get("text") == "My name is spelled Z A R E E N."
+        for e in events
+    )
+    assert any(
+        e.get("event") == "memory_updated" and e.get("update_source") == "spoken_spelling"
+        for e in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_unclear_name_gets_one_clarification_then_opening_continues(tmp_path):
+    session, adapter, spoken, _calls, _log = make_session(tmp_path)
+    await session.start()
+    deliver(session)
+    await turn(adapter, "I'm a bit nervous.")
+    await settle()
+    deliver(session)
+    await turn(adapter, "Sorry, what?")
+    assert spoken[-1].kind is UtteranceKind.NAME_PROMPT
+    assert "spell it" in spoken[-1].text
+    deliver(session)
+    await turn(adapter, "Sorry, what?")
+    assert spoken[-1].kind is UtteranceKind.READINESS
+    assert session.controller.memory.get("candidate_name") is None
+    deliver(session)
+    await turn(adapter, "I'm ready.")
+    assert spoken[-1].text == QUESTIONS[0]
+    assert session.controller.remaining_follow_ups == 1
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_spelling_after_interrupted_name_prompt_does_not_consume_project_probe(tmp_path):
+    session, adapter, spoken, _calls, _log = make_session(tmp_path)
+    await session.start()
+    deliver(session)
+    await turn(adapter, "Good, thanks.")
+    await settle()
+    assert spoken[-1].kind is UtteranceKind.NAME_PROMPT
+    await turn(adapter, "I spell my name N Y L A.")
+    assert session.controller.memory.get("candidate_name").value == "Nyla"
+    assert session.controller.memory.get("candidate_name").confirmed
+    assert spoken[-1].kind is UtteranceKind.READINESS
+    deliver(session)
+    await turn(adapter, "Let's start.")
+    assert spoken[-1].text == QUESTIONS[0]
+    assert session.controller.remaining_follow_ups == 1
+    await session.close()
+
+
 @pytest.mark.parametrize(
     ("greeting", "expected_name", "expected_kind"),
     [

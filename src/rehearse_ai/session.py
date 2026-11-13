@@ -109,7 +109,14 @@ _BARE_AFFIRM_READINESS = re.compile(
 )
 _FINAL_START = re.compile(r"\b(?:start|begin)(?: now| please)?$")
 _NAME_INTRO = re.compile(
-    r"\b(i(?:'m| am)|my name is|name is|call me)\s*,?\s+([A-Za-z]+)(?:\s+([A-Za-z]+))?",
+    r"\b(i(?:'m| am)|my name is|name is|call me)\s*,?\s+([^\W\d_]+)(?:\s+([^\W\d_]+))?",
+    re.I,
+)
+_NAME_SPELLING = re.compile(
+    r"^\s*(?:(?:actually|sorry)[, ]+)?"
+    r"(?P<cue>my name is spelled|i spell my name(?: as)?|"
+    r"i spell it(?: as)?|(?:it's|it is) spelled|spelled(?: as)?)\s+"
+    r"(?P<letters>.+?)\s*$",
     re.I,
 )
 _NAME_DECLINE = re.compile(
@@ -126,16 +133,21 @@ _NON_NAMES = {
     "a",
     "an",
     "bit",
+    "can",
     "doing",
     "fine",
     "good",
     "great",
     "happy",
     "here",
+    "hello",
+    "hey",
+    "hi",
     "okay",
     "ok",
     "ready",
     "really",
+    "sorry",
     "tired",
     "well",
     "nervous",
@@ -150,12 +162,48 @@ _NON_NAMES = {
     "start",
     "begin",
     "sure",
+    "spelled",
+    "you",
 }
+
+
+def _letters_as_name(text: str, *, allow_word: bool = False) -> str | None:
+    parts = re.findall(r"[^\W\d_]+", text, re.UNICODE)
+    if len(parts) >= 2 and all(len(part) == 1 for part in parts):
+        name = "".join(parts)
+        return name[0].upper() + name[1:].lower() if len(name) <= 40 else None
+    if allow_word and len(parts) == 1 and len(parts[0]) <= 40:
+        word = parts[0]
+        return word[0].upper() + word[1:]
+    return None
+
+
+def _spoken_name_spelling(text: str, *, prompted: bool) -> tuple[str, str] | None:
+    # Deepgram may punctuate individually spoken letters as separate sentences.
+    joined = re.sub(r"\b([^\W\d_])\.\s+(?=[^\W\d_]\.)", r"\1 ", text)
+    clauses = re.split(r"(?<=[.!?])\s+", joined.strip())
+    for index, clause in enumerate(clauses):
+        match = _NAME_SPELLING.fullmatch(clause.strip(" .!?"))
+        if match:
+            cue = match["cue"].lower()
+            if not prompted and "name" not in cue:
+                continue
+            name = _letters_as_name(match["letters"], allow_word=True)
+        elif prompted:
+            name = _letters_as_name(clause.strip(" .!?"))
+        else:
+            name = None
+        if name and name.casefold() not in _NON_NAMES:
+            remainder = " ".join([*clauses[:index], *clauses[index + 1 :]]).strip()
+            return name, remainder
+    return None
 
 
 def _preferred_name(text: str, *, prompted: bool) -> str | None:
     """Accept explicit self-identification, or a short answer to a name question."""
     normalized = text.replace("’", "'").strip()
+    if spelling := _spoken_name_spelling(normalized, prompted=prompted):
+        return spelling[0]
     match = _NAME_INTRO.search(normalized)
     if match:
         prefix, first, second = match.groups()
@@ -167,14 +215,14 @@ def _preferred_name(text: str, *, prompted: bool) -> str | None:
             return " ".join(parts)
     if prompted:
         candidate = normalized.strip(" .!?")
+        parts = candidate.split()
         if (
-            1 <= len(candidate.split()) <= 2
-            and all(part.isalpha() for part in candidate.split())
-            and all(
-                part[0].isupper() and part.lower() not in _NON_NAMES for part in candidate.split()
-            )
+            not normalized.endswith("?")
+            and 1 <= len(parts) <= 2
+            and all(part.isalpha() and part.lower() not in _NON_NAMES for part in parts)
+            and (len(parts) == 1 or all(part[0].isupper() for part in parts))
         ):
-            return candidate
+            return " ".join(part[0].upper() + part[1:] for part in parts)
     return None
 
 
@@ -394,64 +442,6 @@ class InterviewSession:
                 }
             )
 
-    async def confirm_name(self, name: str) -> bool:
-        """Accept an explicit browser edit, without trusting later STT variants over it."""
-        if (
-            self._closed
-            or self._stop_latched
-            or self.controller.stage
-            in {
-                Stage.COMPLETE,
-                Stage.ENDED_EARLY,
-                Stage.EARLY_CLOSING,
-            }
-        ):
-            return False
-        previous = self.controller.memory.get("candidate_name")
-        try:
-            self.controller.remember_name(
-                name.strip(),
-                source_turn=None,
-                supplied_wording=name.strip(),
-                confirmed=True,
-                correction=previous is not None
-                and previous.value.casefold() != name.strip().casefold(),
-            )
-        except ValueError:
-            self._record("name_confirmation_rejected", speaker=None, reason="invalid_name")
-            return False
-        if previous and previous.value.casefold() != name.strip().casefold():
-            self._record(
-                "correction_applied",
-                speaker=None,
-                field="candidate_name",
-                superseded_wording=previous.value,
-                supplied_wording=name.strip(),
-                source_turn=None,
-                update_source="manual_confirmation",
-            )
-        self._record(
-            "memory_updated",
-            speaker=None,
-            field="candidate_name",
-            value=self.controller.preferred_name,
-            confirmed=True,
-            source_turn=None,
-            update_source="manual_confirmation",
-        )
-        task = self._response_task
-        if task and not task.done():
-            self._generation += 1
-            task.cancel()
-            self._response_task = None
-            if self.controller.stage in {
-                Stage.AWAITING_PROPOSAL,
-                Stage.AWAITING_OPENING_ACK,
-                Stage.AWAITING_FEEDBACK,
-            }:
-                self._start_response()
-        return True
-
     def _remember_spoken_name(self, name: str, wording: str) -> None:
         previous = self.controller.memory.get("candidate_name")
         self.controller.remember_name(
@@ -471,6 +461,67 @@ class InterviewSession:
                 source_turn=current.source_turn,
                 update_source="spoken_name_extraction",
             )
+
+    def _remember_spelled_name(self, name: str, wording: str) -> None:
+        previous = self.controller.memory.get("candidate_name")
+        changed = previous is not None and previous.value.casefold() != name.casefold()
+        self.controller.remember_name(
+            name,
+            source_turn=self._turn_number or None,
+            supplied_wording=wording,
+            confirmed=True,
+            correction=changed,
+            superseded_wording=previous.value if changed else None,
+        )
+        if changed:
+            self._record(
+                "correction_applied",
+                speaker=None,
+                field="candidate_name",
+                superseded_wording=previous.value,
+                supplied_wording=wording,
+                source_turn=self._turn_number,
+                update_source="spoken_spelling",
+            )
+        self._record(
+            "memory_updated",
+            speaker=None,
+            field="candidate_name",
+            value=self.controller.preferred_name,
+            confirmed=True,
+            source_turn=self._turn_number,
+            update_source="spoken_spelling",
+        )
+
+    async def _route_spoken_name_spelling(self, answer: str) -> str | None:
+        prompted = self.controller.stage is Stage.AWAITING_NAME or (
+            self.controller.interrupted_utterance is not None
+            and self.controller.interrupted_utterance.kind is UtteranceKind.NAME_PROMPT
+        )
+        spelling = _spoken_name_spelling(answer, prompted=prompted)
+        if spelling is None:
+            return None
+        name, remainder = spelling
+        self._remember_spelled_name(name, answer)
+        if prompted and self.controller.stage is Stage.DELIVERING:
+            self.controller.accept_barge_in_answer(answer)
+            self._interrupted_output_id = None
+        if self.controller.stage is Stage.AWAITING_GREETING:
+            return None  # Preserve the full greeting as the candidate's original turn.
+        if self.controller.stage is Stage.AWAITING_NAME:
+            await self._queue_speech(
+                self.controller.submit_name(name, _classify_greeting_readiness(remainder))
+            )
+            return ""
+        if remainder:
+            return remainder
+        if self.controller.stage is Stage.AWAITING_READINESS:
+            await self._queue_speech(self.controller.acknowledge_spelled_name(name))
+            return ""
+        await self._queue_speech(
+            self.controller.acknowledge_correction(f"Thanks, I'll call you {name}.")
+        )
+        return ""
 
     def _correction_field(self, request: _CorrectionRequest) -> FactField | None:
         old = request.superseded
@@ -517,7 +568,7 @@ class InterviewSession:
                 )
                 await self._queue_speech(
                     self.controller.acknowledge_correction(
-                        "I couldn't place that correction. You can edit your name on screen."
+                        "I couldn't place that correction. You can tell me the detail again."
                     )
                 )
                 return ""
@@ -535,6 +586,9 @@ class InterviewSession:
             return ""
         previous = self.controller.memory.get(field_name)
         replacement = request.replacement
+        if field_name == "candidate_name":
+            replacement = re.sub(r"^spelled\s+", "", replacement, flags=re.I)
+            replacement = _letters_as_name(replacement, allow_word=True) or replacement
         if previous and field_name != "candidate_name":
             replacement = re.sub(
                 rf"(?<!\w){re.escape(request.superseded)}(?!\w)",
@@ -823,6 +877,11 @@ class InterviewSession:
                 return
 
         if not self._stop_latched:
+            spelled = await self._route_spoken_name_spelling(answer)
+            if spelled == "":
+                return
+            if spelled is not None:
+                answer = spelled
             corrected = await self._route_correction(answer)
             if corrected == "":
                 return
@@ -1240,14 +1299,19 @@ class InterviewSession:
                 await self._queue_speech(self.controller.retry_name_prompt())
                 return True
             readiness = _classify_greeting_readiness(answer)
-            name = None if _NAME_DECLINE.search(answer) else _preferred_name(answer, prompted=True)
+            declined = bool(_NAME_DECLINE.search(answer))
+            name = None if declined else _preferred_name(answer, prompted=True)
+            if not name and not declined and readiness is not Readiness.READY:
+                self._record("name_unclear", speaker=None, source_turn=self._turn_number)
+                await self._queue_speech(self.controller.clarify_name())
+                return True
             if name:
                 self._remember_spoken_name(name, answer)
             self._record(
                 "name_response",
                 speaker="candidate",
                 preferred_name=name,
-                declined=bool(_NAME_DECLINE.search(answer)),
+                declined=declined,
                 readiness=readiness.name.lower(),
             )
             if readiness is Readiness.READY and name is None:
@@ -2516,8 +2580,6 @@ class InterviewSession:
                     Stage.AWAITING_FEEDBACK,
                 }:
                     self._start_response()
-                else:
-                    asyncio.create_task(self._queue_speech(next_utterance))
 
     async def close(self, *, failed: bool = False) -> None:
         if self._closed:

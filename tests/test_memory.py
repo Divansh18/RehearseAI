@@ -37,7 +37,7 @@ async def question_one(session):
 
 
 @pytest.mark.asyncio
-async def test_manual_name_confirmation_is_authoritative_but_explicit_correction_can_change_it(
+async def test_spoken_name_correction_is_authoritative_but_later_correction_can_change_it(
     tmp_path,
 ):
     async def infer(_kind, _payload):
@@ -56,7 +56,6 @@ async def test_manual_name_confirmation_is_authoritative_but_explicit_correction
     assert session.controller.pending.text == "Thanks, I'll call you Divansh."
     assert session.controller.memory.corrections[-1].source_turn == 1
     deliver(session)
-    assert await session.confirm_name("Divansh")
     session._remember_spoken_name("Devanj", "My name is Devanj")
     assert session.controller.preferred_name == "Divansh"
     assert session.controller.memory.get("candidate_name").confirmed
@@ -105,6 +104,29 @@ async def test_spoken_technical_correction_does_not_spend_probe_or_advance(tmp_p
     assert calls[-1][1]["session_memory"]["project_purpose"]["value"] == (
         "It uses webhooks to review PRs"
     )
+    assert session.controller.remaining_follow_ups == 0
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_spoken_spelling_with_new_answer_content_is_processed_once(tmp_path):
+    calls = []
+
+    async def infer(kind, payload):
+        calls.append((kind, payload))
+        return {"action": "follow_up", "text": "What did you build?", "facts": []}
+
+    session = InterviewSession(
+        SessionLog(tmp_path, "spelling-answer"), infer, lambda _: settle(), lambda _: None
+    )
+    await question_one(session)
+    await session.user_started()
+    await session.user_stopped("My name is spelled N Y L A. I built a GitHub reviewer.")
+    await settle()
+    assert session.controller.memory.get("candidate_name").value == "Nyla"
+    assert session.controller.memory.get("candidate_name").confirmed
+    assert session.controller.answers[0] == ("I built a GitHub reviewer.",)
+    assert len(calls) == 1
     assert session.controller.remaining_follow_ups == 0
     await session.close()
 
@@ -309,7 +331,7 @@ async def test_correction_cancels_obsolete_answer_decision(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_manual_name_change_discards_an_obsolete_decision(tmp_path):
+async def test_spoken_name_correction_discards_an_obsolete_decision(tmp_path):
     first_entered = asyncio.Event()
     release_first = asyncio.Event()
     calls = []
@@ -328,11 +350,15 @@ async def test_manual_name_change_discards_an_obsolete_decision(tmp_path):
     session = InterviewSession(
         SessionLog(tmp_path, "manual-stale"), infer, lambda _: settle(), lambda _: None
     )
+    session._remember_spoken_name("Mia", "My name is Mia")
     await question_one(session)
     await session.user_started()
     await session.user_stopped("I built a GitHub pull-request reviewer.")
     await first_entered.wait()
-    assert await session.confirm_name("Maya")
+    await session.user_started()
+    await session.user_stopped("It's Maya, not Mia.")
+    assert session.controller.pending.kind is UtteranceKind.CORRECTION_ACK
+    deliver(session)
     await settle()
     assert calls[1]["session_memory"]["candidate_name"]["value"] == "Maya"
     assert session.controller.pending.text == "What did you own?"
@@ -413,7 +439,10 @@ async def test_project_memory_correction_and_missing_detail_follow_up(tmp_path):
         SessionLog(tmp_path, "acceptance"), infer, lambda _: settle(), lambda _: None
     )
     session._remember_spoken_name("Mia", "My name is Mia")
-    assert await session.confirm_name("Maya")
+    await session.user_started()
+    await session.user_stopped("My name is spelled M A Y A.")
+    assert session.controller.preferred_name == "Maya"
+    deliver(session)
     await question_one(session)
     await session.user_started()
     await session.user_stopped("I built PR Guard; it posts risk reports as PR comments.")
