@@ -187,12 +187,12 @@ class AccountService:
     async def current_user(self, request: Request, db: AsyncSession) -> Candidate | None:
         token = request.cookies.get(self.cookies.cookie_name)
         user = await self.strategy(db).read_token(token, self.manager(db))
-        return user if user and user.is_active and user.is_verified else None
+        return user if user and user.is_active else None
 
     async def require_user(self, request: Request, db: AsyncSession) -> Candidate:
         user = await self.current_user(request, db)
         if not user:
-            raise HTTPException(401, "Sign in with a verified account to continue")
+            raise HTTPException(401, "Sign in to continue")
         return user
 
     async def rate_limit(
@@ -237,20 +237,19 @@ class AccountService:
     async def sign_up(self, db: AsyncSession, email: str, password: str) -> None:
         manager = self.manager(db)
         try:
-            user = await manager.create(CandidateCreate(email=email, password=password), safe=True)
+            await manager.create(CandidateCreate(email=email, password=password), safe=True)
         except (exceptions.UserAlreadyExists, IntegrityError):
             await db.rollback()
             return
         except exceptions.InvalidPasswordException as exc:
             raise HTTPException(400, str(exc.reason)) from exc
-        await manager.request_verify(user)
 
     async def login(self, db: AsyncSession, email: str, password: str) -> Response:
         manager = self.manager(db)
         credentials = OAuth2PasswordRequestForm(username=email, password=password, scope="")
         user = await manager.authenticate(credentials)
-        if not user or not user.is_active or not user.is_verified:
-            raise HTTPException(401, "Invalid credentials or unverified email")
+        if not user or not user.is_active:
+            raise HTTPException(401, "Invalid credentials")
         token = await self.strategy(db).write_token(user)
         return await self.cookies.get_login_response(token)
 

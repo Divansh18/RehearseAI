@@ -7,11 +7,11 @@ from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from rehearse_ai.accounts import MailDeliveryError, digest, utcnow
-from rehearse_ai.accounts_db import ActionToken, SessionToken
+from rehearse_ai.accounts_db import ActionToken, Candidate, SessionToken
 from rehearse_ai.config import AuthConfig, Settings
 from rehearse_ai.server import create_app
 
@@ -58,14 +58,22 @@ def post(client, headers, path, **body):
 
 def signup(client, headers, email):
     response = post(client, headers, "/api/auth/signup", email=email, password=PASSWORD)
-    assert response.status_code == 202
+    assert response.status_code == 201
+    assert response.json()["message"] == "Account created. Sign in to continue."
 
 
-def verify(client, headers, sent):
-    token = next(token for _, purpose, token in reversed(sent) if purpose == "verify")
-    response = post(client, headers, "/api/auth/verify", token=token)
-    assert response.status_code == 200
-    return token
+def verified_status(email):
+    async def read():
+        engine = create_async_engine(TEST_URL)
+        try:
+            async with engine.connect() as db:
+                return await db.scalar(
+                    select(Candidate.is_verified).where(Candidate.email == email)
+                )
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(read())
 
 
 def expire_token(token):
@@ -96,7 +104,7 @@ def expire_session(token):
     asyncio.run(change())
 
 
-def test_signup_duplicate_and_unverified_denial(account_client):
+def test_signup_duplicate_and_unverified_access(account_client):
     client, headers, sent = account_client
     root = client.get("/", follow_redirects=False)
     assert root.status_code == 303
@@ -114,19 +122,26 @@ def test_signup_duplicate_and_unverified_denial(account_client):
     assert sent == []
     signup(client, headers, email)
     signup(client, headers, email.upper())
-    assert len(sent) == 1
-    assert (
-        post(client, headers, "/api/auth/login", email=email, password=PASSWORD).status_code == 401
-    )
+    assert sent == []
+    assert verified_status(email) is False
     assert client.get("/dashboard", follow_redirects=False).status_code == 303
     assert client.get("/interview", follow_redirects=False).status_code == 303
     assert post(client, headers, "/api/offer", type="bad").status_code == 401
+    assert (
+        post(client, headers, "/api/auth/login", email=email, password=PASSWORD).status_code == 204
+    )
+    assert client.get("/dashboard").status_code == 200
+    assert client.get("/interview").status_code == 200
+    assert post(client, headers, "/api/offer", type="bad").status_code == 400
+    assert verified_status(email) is False
 
 
 def test_verification_expiry_reuse_and_resend_limit(account_client):
     client, headers, sent = account_client
     email = address()
     signup(client, headers, email)
+    assert sent == []
+    assert post(client, headers, "/api/auth/resend-verification", email=email).status_code == 202
     old = sent[-1][2]
     expire_token(old)
     assert post(client, headers, "/api/auth/verify", token=old).status_code == 400
@@ -138,8 +153,9 @@ def test_verification_expiry_reuse_and_resend_limit(account_client):
     assert post(client, headers, "/api/auth/verify", token=new).status_code == 400
     other = address()
     signup(client, headers, other)
+    assert post(client, headers, "/api/auth/resend-verification", email=other).status_code == 202
     initial = sent[-1][2]
-    for _ in range(3):
+    for _ in range(2):
         assert (
             post(client, headers, "/api/auth/resend-verification", email=other).status_code == 202
         )
@@ -152,7 +168,7 @@ def test_login_session_expiry_logout_and_cookie_settings(account_client):
     client, headers, sent = account_client
     email = address()
     signup(client, headers, email)
-    verify(client, headers, sent)
+    assert sent == []
     assert (
         post(client, headers, "/api/auth/login", email=email, password="wrong").status_code == 401
     )
@@ -175,7 +191,7 @@ def test_reset_expiry_reuse_and_existing_sessions_revoked(account_client):
     client, headers, sent = account_client
     email = address()
     signup(client, headers, email)
-    verify(client, headers, sent)
+    assert sent == []
     assert (
         post(client, headers, "/api/auth/login", email=email, password=PASSWORD).status_code == 204
     )
@@ -261,7 +277,7 @@ def test_protected_routes_csrf_and_honest_dashboard(account_client):
         == 403
     )
     signup(client, headers, email)
-    verify(client, headers, sent)
+    assert sent == []
     assert (
         post(client, headers, "/api/auth/login", email=email, password=PASSWORD).status_code == 204
     )
@@ -306,7 +322,7 @@ def test_login_rate_limit_and_generic_reset_request(account_client):
     assert sent == []
 
 
-def test_smtp_failure_never_marks_account_verified(account_client):
+def test_smtp_failure_does_not_block_registration_but_reset_reports_failure(account_client):
     client, headers, _ = account_client
     email = address()
 
@@ -315,6 +331,8 @@ def test_smtp_failure_never_marks_account_verified(account_client):
 
     client.app.state.accounts.mailer.send_link = fail
     response = post(client, headers, "/api/auth/signup", email=email, password=PASSWORD)
-    assert response.status_code == 503
+    assert response.status_code == 201
+    assert verified_status(email) is False
     response = post(client, headers, "/api/auth/login", email=email, password=PASSWORD)
-    assert response.status_code == 401
+    assert response.status_code == 204
+    assert post(client, headers, "/api/auth/request-reset", email=email).status_code == 503

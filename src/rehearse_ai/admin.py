@@ -1,4 +1,4 @@
-"""Explicit local promotion of an existing verified account."""
+"""Explicit local promotion of an existing active account."""
 
 import argparse
 import asyncio
@@ -23,8 +23,8 @@ async def promote(email: str, database_url: str) -> str:
             )
             if user is None:
                 raise ValueError("Account not found")
-            if not user.is_verified:
-                raise ValueError("Verify the account's email before promotion")
+            if not user.is_active:
+                raise ValueError("Activate the account before promotion")
             user.is_superuser = True
             promoted_email = user.email
         return promoted_email
@@ -33,7 +33,7 @@ async def promote(email: str, database_url: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Promote a verified RehearseAI account")
+    parser = argparse.ArgumentParser(description="Promote an active RehearseAI account")
     parser.add_argument("email")
     args = parser.parse_args()
     url = os.environ.get("DATABASE_URL") or dotenv_values(".env").get("DATABASE_URL") or ""
@@ -41,7 +41,7 @@ def main() -> None:
         promoted = asyncio.run(promote(args.email, url))
     except ValueError as exc:
         parser.exit(1, f"Promotion failed: {exc}\n")
-    print(f"Admin role granted to verified account {promoted}")
+    print(f"Admin role granted to account {promoted}")
 
 
 if __name__ == "__main__":

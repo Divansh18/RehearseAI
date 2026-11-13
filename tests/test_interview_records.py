@@ -273,7 +273,7 @@ async def test_normal_early_and_failed_lifecycle(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_admin_promotion_requires_existing_verified_account():
+async def test_admin_promotion_requires_existing_active_account():
     engine = create_async_engine(TEST_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -281,7 +281,13 @@ async def test_admin_promotion_requires_existing_verified_account():
         async with sessions.begin() as db:
             candidate = await db.get(Candidate, unverified.id)
             candidate.is_verified = False
-        with pytest.raises(ValueError, match="Verify"):
+        assert await promote(unverified.email, TEST_URL) == unverified.email
+        async with sessions.begin() as db:
+            candidate = await db.get(Candidate, unverified.id)
+            assert candidate.is_superuser and not candidate.is_verified
+            candidate.is_active = False
+            candidate.is_superuser = False
+        with pytest.raises(ValueError, match="Activate"):
             await promote(unverified.email, TEST_URL)
         with pytest.raises(ValueError, match="not found"):
             await promote(address(), TEST_URL)
@@ -408,18 +414,8 @@ def test_candidate_admin_isolation_and_regeneration(tmp_path):
                 },
                 headers=headers,
             )
-            assert response.status_code == 202
-            verify_token = next(
-                value
-                for to, purpose, value in reversed(sent)
-                if to == email and purpose == "verify"
-            )
-            assert (
-                client.post(
-                    "/api/auth/verify", json={"token": verify_token}, headers=headers
-                ).status_code
-                == 200
-            )
+            assert response.status_code == 201
+            assert sent == []
             assert (
                 client.post(
                     "/api/auth/login", json={"email": email, "password": PASSWORD}, headers=headers
@@ -550,12 +546,9 @@ def test_accepted_offer_uses_server_authenticated_candidate(tmp_path, monkeypatc
             client.post(
                 "/api/auth/signup", json={"email": email, "password": PASSWORD}, headers=headers
             ).status_code
-            == 202
+            == 201
         )
-        assert (
-            client.post("/api/auth/verify", json={"token": sent[-1]}, headers=headers).status_code
-            == 200
-        )
+        assert sent == []
         assert (
             client.post(
                 "/api/auth/login", json={"email": email, "password": PASSWORD}, headers=headers

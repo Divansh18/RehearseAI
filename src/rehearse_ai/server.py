@@ -413,18 +413,13 @@ def create_app(settings: Settings) -> FastAPI:
         accounts.check_csrf(request)
         return await regenerate(await accessible_record(db, record_id, user, admin=True))
 
-    @app.post("/api/auth/signup", status_code=202)
+    @app.post("/api/auth/signup", status_code=201)
     async def sign_up(payload: PasswordPayload, request: Request, db: Db) -> dict[str, str]:
         accounts.check_csrf(request)
         normalized = email(payload.email)
         await limit(db, request, "signup", normalized)
-        try:
-            await accounts.sign_up(db, normalized, payload.password)
-        except MailDeliveryError as exc:
-            raise HTTPException(
-                503, "Verification email could not be sent. Try again later"
-            ) from exc
-        return {"message": "Check your email for a verification link"}
+        await accounts.sign_up(db, normalized, payload.password)
+        return {"message": "Account created. Sign in to continue."}
 
     @app.post("/api/auth/resend-verification", status_code=202)
     async def resend(payload: EmailPayload, request: Request, db: Db) -> dict[str, str]:
@@ -442,7 +437,10 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(
                 503, "Verification email could not be sent. Try again later"
             ) from exc
-        return {"message": "If verification is needed, an email is on its way"}
+        return {
+            "message": "If needed, a verification link was sent to the configured email "
+            "service. Local development captures mail in Mailpit."
+        }
 
     @app.post("/api/auth/verify")
     async def verify(payload: TokenPayload, request: Request, db: Db) -> dict[str, str]:
@@ -493,7 +491,10 @@ def create_app(settings: Settings) -> FastAPI:
             pass
         except MailDeliveryError as exc:
             raise HTTPException(503, "Reset email could not be sent. Try again later") from exc
-        return {"message": "If this account exists, a reset email is on its way"}
+        return {
+            "message": "If this account exists, a reset link was sent to the configured email "
+            "service. Local development captures mail in Mailpit."
+        }
 
     @app.post("/api/auth/reset-password")
     async def reset(payload: ResetPayload, request: Request, db: Db) -> dict[str, str]:

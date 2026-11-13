@@ -49,15 +49,14 @@ function account() {
   const email = document.querySelector('#email');
   const password = document.querySelector('#password');
   const submit = document.querySelector('#submit');
-  document.querySelector('#resend').hidden = !['/login', '/signup'].includes(route);
   document.querySelector('#forgot').hidden = route === '/reset-password';
   const hasToken = new URLSearchParams(location.search).get('token');
   if (hasToken) history.replaceState(null, '', location.pathname);
   const token = hasToken;
   const modes = {
     '/login': ['Sign in', 'Access your candidate dashboard.', 'Sign in'],
-    '/signup': ['Create account', 'Verify your email before entering an interview.', 'Create account'],
-    '/verify': ['Verify email', 'Confirm your email address to use RehearseAI.', 'Verify email'],
+    '/signup': ['Create account', 'Create an account, then sign in to continue.', 'Create account'],
+    '/verify': ['Verify email', 'A previously issued verification link may be used here.', 'Verify email'],
     '/reset-password': ['Reset password', 'Set a new password for your account.', 'Reset password'],
   };
   const [heading, copy, action] = modes[route] || modes['/login'];
@@ -66,7 +65,9 @@ function account() {
   if (route === '/login' && reason === 'expired') {
     show('Your session expired. Sign in again to continue.');
   } else if (route === '/login' && reason === 'required') {
-    show('Sign in with a verified account to continue.');
+    show('Sign in to continue.');
+  } else if (route === '/login' && reason === 'registered') {
+    show('Account created. Sign in to continue.');
   }
   submit.textContent = action;
   email.hidden = route === '/verify' || route === '/reset-password';
@@ -80,7 +81,7 @@ function account() {
   if (route === '/verify' && !token) show('This verification link is missing a token.', true);
   if (route === '/reset-password' && !token) {
     title.textContent = 'Request password reset';
-    intro.textContent = 'We will email a link if this account exists.';
+    intro.textContent = 'If the account exists, a reset link goes to the configured email service. Local development captures mail in Mailpit.';
     submit.textContent = 'Send reset link';
     password.hidden = true;
     document.querySelector('#password-label').hidden = true;
@@ -95,18 +96,12 @@ function account() {
     try {
       const address = email.value.trim();
       if (route === '/login') { await post('/api/auth/login', { email: address, password: password.value }); location.assign('/dashboard'); return; }
-      if (route === '/signup') { const result = await post('/api/auth/signup', { email: address, password: password.value }); show(result.message); }
+      if (route === '/signup') { await post('/api/auth/signup', { email: address, password: password.value }); location.assign('/login?reason=registered'); return; }
       if (route === '/verify') { const result = await post('/api/auth/verify', { token }); show(result.message); }
       if (route === '/reset-password' && token) { const result = await post('/api/auth/reset-password', { token, password: password.value }); show(result.message); }
       if (route === '/reset-password' && !token) { const result = await post('/api/auth/request-reset', { email: address }); show(result.message); }
     } catch (error) { show(error.message, true); }
     finally { submit.disabled = false; }
-  });
-  document.querySelector('#resend').addEventListener('click', async () => {
-    const address = email.value.trim();
-    if (!address) { show('Enter your email above, then choose Resend verification.', true); return; }
-    try { const result = await post('/api/auth/resend-verification', { email: address }); show(result.message); }
-    catch (error) { show(error.message, true); }
   });
   document.querySelector('#forgot').addEventListener('click', () => location.assign('/reset-password'));
 }
