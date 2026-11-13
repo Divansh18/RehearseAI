@@ -16,6 +16,7 @@ const audio = document.querySelector('#remote-audio');
 const nameInput = document.querySelector('#candidate-name');
 const nameStatus = document.querySelector('#name-status');
 const confirmNameButton = document.querySelector('#confirm-name');
+const logoutButton = document.querySelector('#logout');
 let peer = null;
 let microphone = null;
 let channel = null;
@@ -29,6 +30,19 @@ let terminalPending = false;
 let cleanupTimeout = null;
 let timerInterval = null;
 let timerStartedAt = null;
+
+async function checkAccount() {
+  const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
+  if (response.status === 401) {
+    endSession();
+    location.assign('/login?reason=expired');
+    return false;
+  }
+  if (!response.ok) throw new Error('Could not check your sign-in. Refresh the page and try again.');
+  const account = await response.json();
+  document.querySelector('#admin-link').hidden = account.role !== 'admin';
+  return true;
+}
 
 function renderElapsed() {
   const seconds = timerStartedAt === null ? 0 : Math.floor((Date.now() - timerStartedAt) / 1000);
@@ -335,6 +349,7 @@ async function startSession() {
   setStatus('Connecting');
 
   try {
+    if (!await checkAccount()) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('Microphone access requires a supported browser on localhost.');
     }
@@ -402,6 +417,12 @@ async function startSession() {
       signal: offerAbort.signal,
     });
     if (thisAttempt !== attempt) return;
+    if (response.status === 401) {
+      endSession();
+      location.assign('/login?reason=expired');
+      return;
+    }
+    if (response.status === 403) throw new Error('Secure interview setup was rejected. Refresh the page and try again.');
     if (!response.ok) throw new Error('The local voice server rejected the connection.');
     const answer = await response.json();
     if (thisAttempt !== attempt) return;
@@ -430,5 +451,23 @@ confirmNameButton.addEventListener('click', () => {
   }
   channel.send(JSON.stringify({ type: 'confirm_name', name }));
   nameStatus.textContent = 'Saving…';
+});
+logoutButton.addEventListener('click', async () => {
+  endSession();
+  try {
+    const csrfResponse = await fetch('/api/csrf', { credentials: 'same-origin' });
+    if (!csrfResponse.ok) throw new Error('Could not sign out securely. Refresh and try again.');
+    const token = (await csrfResponse.json()).token;
+    const response = await fetch('/api/auth/logout', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
+      body: '{}',
+    });
+    if (!response.ok) throw new Error('Could not sign out. Refresh and try again.');
+    location.assign('/login');
+  } catch (error) { showError(error.message); }
+});
+window.addEventListener('DOMContentLoaded', () => {
+  checkAccount().catch((error) => showError(error.message));
 });
 window.addEventListener('pagehide', endSession);

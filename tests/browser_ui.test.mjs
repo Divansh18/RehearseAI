@@ -55,15 +55,16 @@ class Element {
   addEventListener(name, handler) { this[`on${name}`] = handler; }
 }
 
-function fixture({ active = true } = {}) {
+function fixture({ active = true, fetchResponse } = {}) {
   const ids = ['start', 'end', 'connection', 'microphone', 'status-dot', 'phase-label',
     'question', 'question-count', 'question-progress', 'guidance', 'transcript',
     'jump-latest', 'elapsed', 'error', 'remote-audio', 'session-id',
-    'candidate-name', 'name-status', 'confirm-name'];
+    'candidate-name', 'name-status', 'confirm-name', 'admin-link', 'logout'];
   const nodes = Object.fromEntries(ids.map((id) => [id, new Element()]));
   for (let i = 0; i < 4; i += 1) nodes['question-progress'].append(new Element('span'));
   nodes['question-count'].hidden = true;
   nodes['jump-latest'].hidden = true;
+  nodes['admin-link'].hidden = true;
   nodes.error.hidden = true;
   nodes.start.disabled = false;
   nodes.end.disabled = true;
@@ -83,6 +84,10 @@ function fixture({ active = true } = {}) {
   let nextTimer = 1;
   const context = vm.createContext({
     document, window: { addEventListener() {} }, navigator: {},
+    location: { assigned: null, assign(path) { this.assigned = path; } },
+    fetch: fetchResponse || (async () => ({
+      ok: true, status: 200, json: async () => ({ role: 'candidate' }),
+    })),
     setTimeout: (fn) => { const id = nextTimer++; timeouts.set(id, fn); return id; },
     clearTimeout: (id) => timeouts.delete(id),
     setInterval: (fn) => { const id = nextTimer++; intervals.set(id, fn); return id; },
@@ -196,12 +201,39 @@ test('connecting opens without question progress and microphone denial shows an 
   assert.equal(nodes.connection.textContent, 'Connecting');
   assert.equal(nodes['phase-label'].textContent, 'Opening');
   assert.equal(nodes['question-count'].hidden, true);
+  await new Promise((resolve) => setImmediate(resolve));
   rejectPermission(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
   await attempt;
   assert.equal(nodes.connection.textContent, 'Error');
   assert.match(nodes.error.textContent, /Microphone permission was denied/);
   assert.equal(nodes.start.disabled, false);
   assert.equal(nodes.end.disabled, true);
+});
+
+test('expired account redirects before microphone access or WebRTC setup', async () => {
+  const { context, nodes } = fixture({
+    active: false,
+    fetchResponse: async () => ({ ok: false, status: 401 }),
+  });
+  let microphoneRequested = false;
+  context.navigator.mediaDevices = {
+    getUserMedia: () => { microphoneRequested = true; },
+  };
+  await context.startSession();
+  assert.equal(microphoneRequested, false);
+  assert.equal(context.location.assigned, '/login?reason=expired');
+  assert.equal(nodes.end.disabled, true);
+});
+
+test('admin navigation appears only for the authenticated admin role', async () => {
+  const candidate = fixture();
+  await candidate.context.checkAccount();
+  assert.equal(candidate.nodes['admin-link'].hidden, true);
+  const admin = fixture({
+    fetchResponse: async () => ({ ok: true, status: 200, json: async () => ({ role: 'admin' }) }),
+  });
+  await admin.context.checkAccount();
+  assert.equal(admin.nodes['admin-link'].hidden, false);
 });
 
 test('End session releases tracks and connections immediately', () => {
@@ -290,6 +322,7 @@ test('manual End cancels pending automatic cleanup and a new session resets pres
   assert.equal(nodes.elapsed.textContent, '00:00');
   assert.equal(nodes['question-progress'].children[0].dataset.state, undefined);
   assert.equal(nodes.transcript.children.length, 1);
+  await new Promise((resolve) => setImmediate(resolve));
   rejectPermission(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
   await next;
   assert.equal(nodes.connection.textContent, 'Error');

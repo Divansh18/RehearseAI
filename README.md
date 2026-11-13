@@ -23,6 +23,8 @@ uv run python -m rehearse_ai
 
 Open **http://127.0.0.1:7860/**. Create an account, open the verification link in the local inbox at **http://127.0.0.1:8025/**, then sign in. `/dashboard` is protected. Each accepted voice connection creates a saved attempt tied to the server-authenticated account. The dashboard shows its real records; there are no scheduled appointments or example interviews. To designate an admin, first sign up and verify that account, then run:
 
+Anonymous visits to `/` go to the sign-in page, which links to registration and verification resend. The interview page links back to the dashboard and offers logout; expired sessions return to sign-in with an explanation before microphone setup. The browser sends the signed CSRF token alongside the authenticated WebRTC offer.
+
 ```sh
 uv run python -m rehearse_ai.admin admin@example.com
 ```

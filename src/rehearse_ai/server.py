@@ -112,6 +112,10 @@ def create_app(settings: Settings) -> FastAPI:
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
 
+    def sign_in_redirect(request: Request) -> RedirectResponse:
+        reason = "expired" if accounts.cookies.cookie_name in request.cookies else "required"
+        return RedirectResponse(f"/login?reason={reason}", status_code=303)
+
     class EmailPayload(BaseModel):
         email: EmailStr
 
@@ -150,7 +154,9 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/")
     async def home(request: Request, db: Db) -> RedirectResponse:
         user = await accounts.current_user(request, db)
-        return RedirectResponse("/dashboard" if user else "/login", status_code=303)
+        if user:
+            return RedirectResponse("/dashboard", status_code=303)
+        return sign_in_redirect(request)
 
     @app.get("/login")
     @app.get("/signup")
@@ -163,23 +169,33 @@ def create_app(settings: Settings) -> FastAPI:
     async def dashboard(request: Request, db: Db) -> Response:
         user = await accounts.current_user(request, db)
         if not user:
-            return RedirectResponse("/login", status_code=303)
+            return sign_in_redirect(request)
         return page("dashboard.html")
 
     @app.get("/interviews/{record_id}")
     async def candidate_detail(record_id: uuid.UUID, request: Request, db: Db) -> Response:
-        user = await accounts.require_user(request, db)
+        user = await accounts.current_user(request, db)
+        if not user:
+            return sign_in_redirect(request)
         await accessible_record(db, record_id, user, admin=False)
         return page("interview_record.html")
 
     @app.get("/admin/interviews")
     async def admin_page(request: Request, db: Db) -> Response:
-        await require_admin(request, db)
+        user = await accounts.current_user(request, db)
+        if not user:
+            return sign_in_redirect(request)
+        if not user.is_superuser:
+            raise HTTPException(403, "Administrator access required")
         return page("admin.html")
 
     @app.get("/admin/interviews/{record_id}")
     async def admin_detail(record_id: uuid.UUID, request: Request, db: Db) -> Response:
-        user = await require_admin(request, db)
+        user = await accounts.current_user(request, db)
+        if not user:
+            return sign_in_redirect(request)
+        if not user.is_superuser:
+            raise HTTPException(403, "Administrator access required")
         await accessible_record(db, record_id, user, admin=True)
         return page("interview_record.html")
 
@@ -187,7 +203,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def interview(request: Request, db: Db) -> Response:
         user = await accounts.current_user(request, db)
         if not user:
-            return RedirectResponse("/login", status_code=303)
+            return sign_in_redirect(request)
         return page("index.html")
 
     @app.get("/api/csrf")

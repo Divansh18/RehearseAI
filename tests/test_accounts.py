@@ -98,6 +98,16 @@ def expire_session(token):
 
 def test_signup_duplicate_and_unverified_denial(account_client):
     client, headers, sent = account_client
+    root = client.get("/", follow_redirects=False)
+    assert root.status_code == 303
+    assert root.headers["location"] == "/login?reason=required"
+    assert "Create account" in client.get("/login").text
+    client.cookies.set("rehearse_session", "expired-token")
+    expired = client.get("/interview", follow_redirects=False)
+    assert expired.status_code == 303
+    assert expired.headers["location"] == "/login?reason=expired"
+    assert client.get("/", follow_redirects=False).headers["location"] == "/login?reason=expired"
+    client.cookies.delete("rehearse_session")
     email = address()
     weak = post(client, headers, "/api/auth/signup", email=email, password="short")
     assert weak.status_code == 400
@@ -260,6 +270,9 @@ def test_protected_routes_csrf_and_honest_dashboard(account_client):
     assert "No interviews have been assigned yet" in page
     assert "No interviews have been recorded yet" in page
     assert client.get("/interview").status_code == 200
+    interview_page = client.get("/interview").text
+    assert 'href="/dashboard"' in interview_page
+    assert 'id="logout"' in interview_page
     assert client.post("/api/offer", json={"type": "bad"}).status_code == 403
     assert post(client, headers, "/api/offer", type="bad").status_code == 400
     assert client.get("/assets/index.html").status_code == 404

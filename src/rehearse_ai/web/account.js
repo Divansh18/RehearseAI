@@ -42,6 +42,7 @@ async function dashboard() {
 
 function account() {
   const route = location.pathname;
+  const reason = new URLSearchParams(location.search).get('reason');
   const title = document.querySelector('#title');
   const intro = document.querySelector('#intro');
   const form = document.querySelector('#account-form');
@@ -62,6 +63,11 @@ function account() {
   const [heading, copy, action] = modes[route] || modes['/login'];
   title.textContent = heading;
   intro.textContent = copy;
+  if (route === '/login' && reason === 'expired') {
+    show('Your session expired. Sign in again to continue.');
+  } else if (route === '/login' && reason === 'required') {
+    show('Sign in with a verified account to continue.');
+  }
   submit.textContent = action;
   email.hidden = route === '/verify' || route === '/reset-password';
   document.querySelector('#email-label').hidden = email.hidden;
