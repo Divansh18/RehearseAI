@@ -258,7 +258,7 @@ def test_protected_routes_csrf_and_honest_dashboard(account_client):
     assert client.get("/dashboard").status_code == 200
     page = client.get("/dashboard").text
     assert "No interviews have been assigned yet" in page
-    assert "No completed interviews are saved yet" in page
+    assert "No interviews have been recorded yet" in page
     assert client.get("/interview").status_code == 200
     assert client.post("/api/offer", json={"type": "bad"}).status_code == 403
     assert post(client, headers, "/api/offer", type="bad").status_code == 400

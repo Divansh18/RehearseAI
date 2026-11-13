@@ -44,6 +44,7 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 7860
     session_dir: Path = Path("sessions")
+    pdf_dir: Path = Path("private_pdfs")
     stt_model: str = "nova-3-general"
     llm_model: str = "gpt-4.1-mini"
     tts_provider: str = "cartesia"
@@ -202,6 +203,7 @@ class Settings:
             host=host,
             port=port,
             session_dir=Path(values.get("REHEARSE_SESSION_DIR", "sessions")),
+            pdf_dir=Path(values.get("REHEARSE_PDF_DIR", "private_pdfs")),
             stt_model=values.get("REHEARSE_STT_MODEL", "nova-3-general"),
             llm_model=values.get("REHEARSE_LLM_MODEL", "gpt-4.1-mini"),
             tts_provider=provider,

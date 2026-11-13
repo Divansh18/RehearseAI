@@ -12,6 +12,7 @@ htmlcov/
 build/
 dist/
 sessions/
+private_pdfs/
 logs/
 recordings/
 *.wav

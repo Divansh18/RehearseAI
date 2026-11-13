@@ -13,20 +13,22 @@
       <div><a class="brand" href="/dashboard">RehearseAI</a><p>A little practice before it matters.</p></div>
       <button id="logout" type="button">Log out</button>
     </header>
-    <div class="dashboard-title"><h1>Your interviews</h1><p>Signed in as <strong id="candidate-email">Loading…</strong></p></div>
+    <div class="dashboard-title"><h1>Your interviews</h1><p>Signed in as <strong id="candidate-email">Loading…</strong></p><p><a href="/interview">Start an interview</a> <a id="admin-link" href="/admin/interviews" hidden>Admin viewer</a></p></div>
     <div class="dashboard-grid">
       <section class="account-card" aria-labelledby="upcoming-title">
         <h2 id="upcoming-title">Upcoming interviews</h2>
         <p class="muted">No interviews have been assigned yet.</p>
       </section>
       <section class="account-card" aria-labelledby="completed-title">
-        <h2 id="completed-title">Completed interviews</h2>
-        <p class="muted">No completed interviews are saved yet.</p>
+        <h2 id="completed-title">Interview records</h2>
+        <p class="muted" id="record-empty">No interviews have been recorded yet.</p>
+        <div id="records" class="record-list"></div>
+        <div class="pager"><button id="previous" type="button" hidden>Previous</button><span id="page-label"></span><button id="next" type="button" hidden>Next</button></div>
       </section>
     </div>
-    <p class="fineprint">Interview scheduling and saved interview records are coming in a later milestone.</p>
+    <p class="fineprint">Scheduling is not available yet. A disconnected or failed interview may have a partial conversation.</p>
     <p id="message" role="alert" hidden></p>
   </main>
-  <script src="/assets/account.js?v=__BUILD_ID__" defer></script>
+  <script src="/assets/history.js?v=__BUILD_ID__" defer></script>
 </body>
 </html>

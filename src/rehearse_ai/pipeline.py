@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -245,10 +245,12 @@ class LiveSession:
         *,
         build_id: str | None = None,
         candidate_id: str | None = None,
+        session_id: str | None = None,
+        event_sink: Callable[[dict[str, Any]], bool] | None = None,
     ) -> None:
         self.connection = connection
         self.candidate_id = candidate_id
-        self.log = SessionLog(settings.session_dir, str(uuid.uuid4()))
+        self.log = SessionLog(settings.session_dir, session_id or str(uuid.uuid4()), event_sink)
         if candidate_id is not None:
             self.log.record("candidate_authenticated", candidate_id=candidate_id)
         transport = SmallWebRTCTransport(
@@ -344,10 +346,12 @@ class LiveSession:
                     await self.session.confirm_name(name)
 
     async def run(self) -> None:
+        failed = False
         try:
             await self.runner.add_workers(self.worker)
             await self.runner.run()
         except Exception:
+            failed = True
             self.session.pipeline_error(
                 processor="PipelineWorker",
                 category="unexpected_failure",
@@ -356,7 +360,7 @@ class LiveSession:
             )
             raise
         finally:
-            await self.session.close()
+            await self.session.close(failed=failed)
 
     async def stop(self) -> None:
         await self.session.close()

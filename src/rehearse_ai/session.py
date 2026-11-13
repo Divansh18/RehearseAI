@@ -385,6 +385,14 @@ class InterviewSession:
     def _record(self, event: str, **details: Any) -> None:
         entry = self.log.record(event, **details)
         self._publish({"type": "rehearseai", "event": entry})
+        if self.log.persistence_failed:
+            self.log.persistence_failed = False
+            self._publish(
+                {
+                    "type": "rehearseai",
+                    "event": {"event": "persistence_error", "session_id": self.log.session_id},
+                }
+            )
 
     async def confirm_name(self, name: str) -> bool:
         """Accept an explicit browser edit, without trusting later STT variants over it."""
@@ -2511,7 +2519,7 @@ class InterviewSession:
                 else:
                     asyncio.create_task(self._queue_speech(next_utterance))
 
-    async def close(self) -> None:
+    async def close(self, *, failed: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
@@ -2535,6 +2543,8 @@ class InterviewSession:
             end_kind = "normal_completion"
         elif self.controller.stage is Stage.ENDED_EARLY:
             end_kind = "spoken_early_end"
+        elif failed:
+            end_kind = "pipeline_failed"
         else:
             end_kind = "disconnected_before_completion"
         self._record(

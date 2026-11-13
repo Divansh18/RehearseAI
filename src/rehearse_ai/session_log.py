@@ -3,16 +3,25 @@
 import json
 import os
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 
 class SessionLog:
-    def __init__(self, directory: Path, session_id: str) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        session_id: str,
+        event_sink: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         self.path = directory / f"{session_id}.jsonl"
         self.session_id = session_id
+        self.event_sink = event_sink
+        self.persistence_failed = False
+        self.storage_warning_sent = False
         self._sequence = 0
         self._clock_start_ns = time.monotonic_ns()
         descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -48,6 +57,13 @@ class SessionLog:
         }
         self._file.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._file.flush()
+        if (
+            self.event_sink is not None
+            and not self.event_sink(entry)
+            and not self.storage_warning_sent
+        ):
+            self.persistence_failed = True
+            self.storage_warning_sent = True
         return entry
 
     def close(self) -> None:

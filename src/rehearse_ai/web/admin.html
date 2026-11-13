@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RehearseAI — Admin interviews</title>
+  <link rel="stylesheet" href="/assets/account.css?v=__BUILD_ID__">
+</head>
+<body>
+  <main class="dashboard-shell">
+    <header class="dashboard-header"><div><a class="brand" href="/dashboard">RehearseAI</a><p>Interview viewer</p></div><button id="logout" type="button">Log out</button></header>
+    <div class="dashboard-title"><h1>All interviews</h1><p>Signed in as <strong id="candidate-email">Loading…</strong></p></div>
+    <section class="account-card">
+      <form id="filters" class="filter-row">
+        <label>Candidate email <input id="email-filter" type="search" autocomplete="off"></label>
+        <label>Status <select id="status-filter"><option value="">All</option><option value="starting">Starting</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="ended_early">Ended early</option><option value="interrupted">Interrupted</option><option value="failed">Failed</option></select></label>
+        <button type="submit">Filter</button>
+      </form>
+      <p class="muted" id="record-empty">No interview records match these filters.</p>
+      <div id="records" class="record-list"></div>
+      <div class="pager"><button id="previous" type="button" hidden>Previous</button><span id="page-label"></span><button id="next" type="button" hidden>Next</button></div>
+    </section>
+    <p id="message" role="alert" hidden></p>
+  </main>
+  <script src="/assets/history.js?v=__BUILD_ID__" defer></script>
+</body>
+</html>

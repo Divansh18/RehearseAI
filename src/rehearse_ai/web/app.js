@@ -230,6 +230,8 @@ function handleEvent(message) {
   } else if (entry.event === 'no_project_repeat_limit' || entry.event === 'project_example_required') {
     guidance.textContent = 'Use a technical example, or say “end the interview”.';
     if (errorLabel.hidden) setStatus('Listening');
+  } else if (entry.event === 'persistence_error') {
+    showError('This interview is not being saved. You may continue, but check the server before relying on its record.');
   } else if (entry.event === 'response_error') {
     if (entry.error_code === 'tts_context_no_audio') {
       showWarning('The voice service returned no audio. You can speak to retry the prompt.');

@@ -131,6 +131,16 @@ test('queued speech stays out of transcript; output, interruption, and candidate
   assert.match(nodes.transcript.children[2].textContent, /I built a parser\. It reads config files\./);
 });
 
+test('database write failure stays visible and does not claim the interview was saved', () => {
+  const { nodes, send } = fixture();
+  send({ event: 'persistence_error' });
+  assert.match(nodes.error.textContent, /not being saved/);
+  assert.equal(nodes.error.hidden, false);
+  assert.equal(nodes.connection.textContent, 'Error');
+  send({ event: 'agent_output_started', utterance_id: 1 });
+  assert.equal(nodes.error.hidden, false);
+});
+
 test('transcript does not snap back when reader has scrolled up', () => {
   const { nodes, send } = fixture();
   send({ event: 'candidate_final', answer_number: 1, text: 'First segment.' });
