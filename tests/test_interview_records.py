@@ -383,6 +383,60 @@ def test_long_unicode_pdf_and_escaped_transcript(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.parametrize(
+    ("status", "expected_partial"),
+    [("completed", False), ("ended_early", True), ("interrupted", True)],
+)
+def test_pdf_metadata_and_conversation_labels(tmp_path, status, expected_partial):
+    path = tmp_path / "private" / f"{status}.pdf"
+    start = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 11, 13, 10, 4, 12, tzinfo=UTC)
+    build_pdf(
+        path,
+        {
+            "id": str(uuid.uuid4()),
+            "candidate_email": "candidate@example.com",
+            "candidate_name": "Zoë García",
+            "created_at": start,
+            "started_at": start,
+            "ended_at": end,
+            "status": status,
+        },
+        [
+            {
+                "speaker": "agent",
+                "timestamp_utc": start,
+                "text": "Tell me about your project.",
+                "status": "output_completed",
+            },
+            {
+                "speaker": "candidate",
+                "timestamp_utc": end,
+                "text": "I built a webhook service.",
+                "status": "machine_transcription",
+            },
+            {
+                "speaker": "agent",
+                "timestamp_utc": end,
+                "text": "An interrupted response.",
+                "status": "interrupted",
+            },
+        ],
+    )
+    text = "\n".join(page.extract_text() for page in PdfReader(path).pages)
+    assert "Interview Transcript" in text
+    assert "candidate@example.com" in text
+    assert "Candidate name (self-reported)" in text and "Zoë García" in text
+    assert "UTC" in text and "4m 12s" in text
+    assert status.replace("_", " ").title() in text
+    assert ("partial interview conversation" in text) is expected_partial
+    assert text.index("Tell me about your project") < text.index("I built a webhook service")
+    assert "RehearseAI" in text and "Candidate" in text
+    assert "Machine transcription" in text
+    assert "exact words heard unknown" in text
+    assert "Page 1" in text
+
+
 def test_candidate_admin_isolation_and_regeneration(tmp_path):
     settings = Settings(
         deepgram_api_key="test-dg",
@@ -400,6 +454,11 @@ def test_candidate_admin_isolation_and_regeneration(tmp_path):
 
     app.state.accounts.mailer.send_link = capture
     with TestClient(app) as client:
+        unknown = uuid.uuid4()
+        assert client.get(f"/api/interviews/{unknown}/pdf").status_code == 401
+        assert client.get(f"/api/admin/interviews/{unknown}/pdf").status_code == 401
+        assert client.post(f"/api/interviews/{unknown}/pdf/regenerate").status_code == 401
+        assert client.post(f"/api/admin/interviews/{unknown}/pdf/regenerate").status_code == 401
         token = client.get("/api/csrf").json()["token"]
         headers = {"X-CSRF-Token": token}
         email_a, email_b, email_admin = address(), address(), address()
@@ -438,7 +497,22 @@ def test_candidate_admin_isolation_and_regeneration(tmp_path):
             client.portal.call(store.apply_event, log.record(kind, **values))
         log.close()
         client.portal.call(store.pdf_jobs.join)
-        assert client.get(f"/api/interviews/{record_a}/pdf").status_code == 200
+        assert client.get(f"/api/interviews/{record_a}/pdf").status_code == 403
+        assert client.get(f"/api/admin/interviews/{record_a}/pdf").status_code == 403
+        assert (
+            client.post(f"/api/interviews/{record_a}/pdf/regenerate", headers=headers).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                f"/api/admin/interviews/{record_a}/pdf/regenerate", headers=headers
+            ).status_code
+            == 403
+        )
+        assert "pdf_status" not in client.get(f"/api/interviews/{record_a}").json()
+        assert "pdf_status" not in client.get("/api/interviews").json()["items"][0]
+        candidate_page = client.get(f"/interviews/{record_a}").text
+        assert "pdf-link" not in candidate_page and "pdf-regenerate" not in candidate_page
         assert (
             client.get(f"/api/interviews/{record_a}/transcript").json()[0]["text"]
             == "A private answer"
@@ -453,13 +527,13 @@ def test_candidate_admin_isolation_and_regeneration(tmp_path):
             f"/interviews/{record_a}",
             f"/api/interviews/{record_a}",
             f"/api/interviews/{record_a}/transcript",
-            f"/api/interviews/{record_a}/pdf",
         ):
             assert client.get(route).status_code == 404
+        assert client.get(f"/api/interviews/{record_a}/pdf").status_code == 403
         assert client.get("/api/admin/interviews").status_code == 403
         assert (
             client.post(f"/api/interviews/{record_a}/pdf/regenerate", headers=headers).status_code
-            == 404
+            == 403
         )
 
         create_account(email_admin)
@@ -478,6 +552,7 @@ def test_candidate_admin_isolation_and_regeneration(tmp_path):
         all_ids = {item["id"] for item in client.get("/api/admin/interviews").json()["items"]}
         assert {str(record_a), str(record_b)} <= all_ids
         assert client.get(f"/admin/interviews/{record_a}").status_code == 200
+        assert "pdf-link" in client.get(f"/admin/interviews/{record_a}").text
         assert client.get(f"/api/admin/interviews/{record_a}/transcript").status_code == 200
         assert client.get(f"/api/admin/interviews/{record_a}/pdf").status_code == 200
         assert client.post(f"/api/admin/interviews/{record_a}/pdf/regenerate").status_code == 403

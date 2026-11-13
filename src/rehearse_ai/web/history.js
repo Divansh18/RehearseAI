@@ -98,6 +98,7 @@ async function loadDetail() {
     conversation.append(block);
   });
   if (!transcript.length) conversation.append(item('p', 'No final conversation text is saved yet.', 'muted'));
+  if (!admin) return;
   const state = document.querySelector('#pdf-state');
   const download = document.querySelector('#pdf-link');
   const regenerate = document.querySelector('#pdf-regenerate');

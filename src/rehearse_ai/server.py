@@ -197,7 +197,7 @@ def create_app(settings: Settings) -> FastAPI:
         if not user.is_superuser:
             raise HTTPException(403, "Administrator access required")
         await accessible_record(db, record_id, user, admin=True)
-        return page("interview_record.html")
+        return page("admin_interview_record.html")
 
     @app.get("/interview")
     async def interview(request: Request, db: Db) -> Response:
@@ -233,8 +233,10 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(404, "Interview not found")
         return record
 
-    def record_data(record: InterviewRecord, candidate_email: str | None = None) -> dict:
-        return {
+    def record_data(
+        record: InterviewRecord, candidate_email: str | None = None, *, admin: bool = False
+    ) -> dict:
+        data = {
             "id": str(record.id),
             "candidate_email": candidate_email,
             "created_at": record.created_at.isoformat(),
@@ -244,9 +246,11 @@ def create_app(settings: Settings) -> FastAPI:
             "termination_reason": record.termination_reason,
             "build_id": record.build_id,
             "prompt_version": record.prompt_version,
-            "pdf_status": record.pdf_status,
-            "pdf_error": record.pdf_error,
         }
+        if admin:
+            data["pdf_status"] = record.pdf_status
+            data["pdf_error"] = record.pdf_error
+        return data
 
     async def list_records(
         db: AsyncSession,
@@ -255,6 +259,7 @@ def create_app(settings: Settings) -> FastAPI:
         candidate_email: str | None = None,
         status: str | None = None,
         page_number: int = 1,
+        admin: bool = False,
     ) -> dict:
         if status and status not in {"starting", "in_progress", *TERMINAL}:
             raise HTTPException(400, "Invalid interview status")
@@ -278,7 +283,7 @@ def create_app(settings: Settings) -> FastAPI:
             )
         ).all()
         return {
-            "items": [record_data(row, address) for row, address in rows],
+            "items": [record_data(row, address, admin=admin) for row, address in rows],
             "total": total,
             "page": page_number,
             "page_size": 20,
@@ -323,7 +328,11 @@ def create_app(settings: Settings) -> FastAPI:
     ) -> dict:
         await require_admin(request, db)
         return await list_records(
-            db, candidate_email=candidate_email, status=status, page_number=page_number
+            db,
+            candidate_email=candidate_email,
+            status=status,
+            page_number=page_number,
+            admin=True,
         )
 
     @app.get("/api/interviews/{record_id}")
@@ -336,7 +345,7 @@ def create_app(settings: Settings) -> FastAPI:
         user = await require_admin(request, db)
         record = await accessible_record(db, record_id, user, admin=True)
         candidate = await db.get(Candidate, record.candidate_id)
-        return record_data(record, candidate.email)
+        return record_data(record, candidate.email, admin=True)
 
     @app.get("/api/interviews/{record_id}/transcript")
     async def candidate_transcript(record_id: uuid.UUID, request: Request, db: Db) -> list[dict]:
@@ -375,9 +384,9 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     @app.get("/api/interviews/{record_id}/pdf")
-    async def candidate_pdf(record_id: uuid.UUID, request: Request, db: Db) -> Response:
-        user = await accounts.require_user(request, db)
-        return await pdf_response(await accessible_record(db, record_id, user, admin=False))
+    async def legacy_admin_pdf(record_id: uuid.UUID, request: Request, db: Db) -> Response:
+        user = await require_admin(request, db)
+        return await pdf_response(await accessible_record(db, record_id, user, admin=True))
 
     @app.get("/api/admin/interviews/{record_id}/pdf")
     async def admin_pdf(record_id: uuid.UUID, request: Request, db: Db) -> Response:
@@ -402,10 +411,10 @@ def create_app(settings: Settings) -> FastAPI:
         return {"message": "PDF regeneration queued"}
 
     @app.post("/api/interviews/{record_id}/pdf/regenerate", status_code=202)
-    async def candidate_regenerate(record_id: uuid.UUID, request: Request, db: Db) -> dict:
-        user = await accounts.require_user(request, db)
+    async def legacy_admin_regenerate(record_id: uuid.UUID, request: Request, db: Db) -> dict:
+        user = await require_admin(request, db)
         accounts.check_csrf(request)
-        return await regenerate(await accessible_record(db, record_id, user, admin=False))
+        return await regenerate(await accessible_record(db, record_id, user, admin=True))
 
     @app.post("/api/admin/interviews/{record_id}/pdf/regenerate", status_code=202)
     async def admin_regenerate(record_id: uuid.UUID, request: Request, db: Db) -> dict:

@@ -2,24 +2,73 @@
 
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import CondPageBreak, HRFlowable, Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import (
+    CondPageBreak,
+    HRFlowable,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+)
 
 FONT = Path(__file__).resolve().parent / "fonts" / "NotoSans-Regular.ttf"
+INK = colors.HexColor("#181818")
+MUTED = colors.HexColor("#666666")
+RULE = colors.HexColor("#dedede")
 
 
-def _date(value: datetime | None) -> str:
-    return value.astimezone().strftime("%d %b %Y, %H:%M:%S %Z") if value else "Not recorded"
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _time(value: datetime | None) -> str:
+    normalized = _utc(value)
+    return normalized.strftime("%d %b %Y, %H:%M:%S UTC") if normalized else "Not recorded"
+
+
+def _duration(started: datetime | None, ended: datetime | None) -> str:
+    if not started or not ended:
+        return "Not available"
+    seconds = int((_utc(ended) - _utc(started)).total_seconds())
+    if seconds < 0:
+        return "Not available"
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:d}h {minutes:02d}m {seconds:02d}s" if hours else f"{minutes:d}m {seconds:02d}s"
+
+
+def _entry_time(value: datetime | None, started: datetime | None) -> str:
+    stamp, origin = _utc(value), _utc(started)
+    if stamp and origin and stamp >= origin:
+        elapsed = int((stamp - origin).total_seconds())
+        minutes, seconds = divmod(elapsed, 60)
+        return f"+{minutes:02d}:{seconds:02d}"
+    return _time(value)
+
+
+def _entry_state(entry: dict[str, Any]) -> str:
+    if entry["speaker"] == "candidate":
+        return "Machine transcription"
+    return {
+        "prepared": "Prepared; no output observed",
+        "output_started": "Server output started; completion unconfirmed",
+        "output_completed": "Server output completed",
+        "cancelled": "Cancelled before output",
+        "interrupted": "Interrupted; exact words heard unknown",
+        "failed": "Output failed",
+    }.get(entry["status"], "Output status unknown")
 
 
 def build_pdf(path: Path, record: dict[str, Any], entries: list[dict[str, Any]]) -> None:
@@ -28,75 +77,111 @@ def build_pdf(path: Path, record: dict[str, Any], entries: list[dict[str, Any]])
     os.chmod(path.parent, 0o700)
     if "RehearseNoto" not in pdfmetrics.getRegisteredFontNames():
         pdfmetrics.registerFont(TTFont("RehearseNoto", str(FONT)))
+
     body = ParagraphStyle(
         "body",
         fontName="RehearseNoto",
-        fontSize=9.6,
-        leading=15,
-        textColor=colors.HexColor("#171717"),
-        spaceAfter=8,
-        alignment=TA_LEFT,
+        fontSize=9.5,
+        leading=14.5,
+        textColor=INK,
         splitLongWords=1,
     )
-    small = ParagraphStyle(
-        "small",
+    muted = ParagraphStyle(
+        "muted",
         parent=body,
         fontSize=8,
         leading=12,
-        textColor=colors.HexColor("#555555"),
+        textColor=MUTED,
+    )
+    label = ParagraphStyle(
+        "label",
+        parent=body,
+        fontSize=8.5,
+        leading=12,
+    )
+    title = ParagraphStyle(
+        "title",
+        parent=body,
+        fontSize=19,
+        leading=25,
         spaceAfter=5,
     )
-    heading = ParagraphStyle(
-        "heading",
-        parent=body,
-        fontSize=18,
-        leading=24,
-        spaceAfter=12,
-    )
-    story = [Paragraph("RehearseAI interview transcript", heading)]
-    status = record["status"].replace("_", " ").title()
-    fields = (
-        ("Interview", record["id"]),
-        ("Candidate", record["candidate_email"]),
+
+    def paragraph(value: object, style: ParagraphStyle = body) -> Paragraph:
+        return Paragraph(escape(str(value)).replace("\n", "<br/>"), style)
+
+    started = record.get("started_at")
+    ended = record.get("ended_at")
+    status = str(record["status"]).replace("_", " ").title()
+    story = [
+        paragraph("REHEARSEAI", label),
+        Spacer(1, 3),
+        paragraph("Interview Transcript", title),
+        paragraph(f"Interview ID  {record['id']}", muted),
+        Spacer(1, 14),
+    ]
+
+    fields = [
+        ("Candidate account", record["candidate_email"]),
+        ("Interview date", _time(record.get("created_at") or started)),
+        ("Started", _time(started)),
+        ("Ended", _time(ended)),
+        ("Duration", _duration(started, ended)),
         ("Status", status),
-        ("Reason", record.get("termination_reason") or "Not recorded"),
-        ("Started", _date(record.get("started_at"))),
-        ("Ended", _date(record.get("ended_at"))),
+    ]
+    if record.get("candidate_name"):
+        fields.insert(1, ("Candidate name (self-reported)", record["candidate_name"]))
+    rows = [[paragraph(key, muted), paragraph(value, body)] for key, value in fields]
+    metadata = Table(rows, colWidths=[145, A4[0] - 84 - 145], hAlign="LEFT")
+    metadata.setStyle(
+        [
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]
     )
-    for label, value in fields:
-        story.append(Paragraph(f"{escape(label)}: {escape(str(value))}", small))
-    story.append(Spacer(1, 9))
-    story.append(
-        Paragraph(
-            "Candidate speech is machine transcription. Assistant completion means server output "
-            "completed; it does not confirm browser playback or exact words heard.",
-            small,
-        )
+    story.extend([metadata, Spacer(1, 12)])
+    if record["status"] in {"ended_early", "interrupted", "failed"}:
+        story.append(paragraph("This is a partial interview conversation.", muted))
+        story.append(Spacer(1, 5))
+    story.extend(
+        [
+            paragraph(
+                "Candidate text is machine-transcribed. Assistant output status reflects server "
+                "events, not exact browser playback or words heard.",
+                muted,
+            ),
+            Spacer(1, 13),
+            HRFlowable(width="100%", thickness=0.6, color=RULE),
+            Spacer(1, 10),
+        ]
     )
-    if status in {"Interrupted", "Failed", "Ended Early"}:
-        story.append(Paragraph("This is a partial interview conversation.", small))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#dddddd")))
-    story.append(Spacer(1, 12))
+
     for entry in entries:
-        story.append(CondPageBreak(70))
-        speaker = "You" if entry["speaker"] == "candidate" else "RehearseAI"
-        state = entry["status"].replace("_", " ")
-        stamp = _date(entry["timestamp_utc"])
-        story.append(Paragraph(f"{speaker} - {stamp} ({state})", small))
-        # Paragraph accepts markup, so escape untrusted transcript text first.
-        safe_text = escape(entry["text"]).replace("\n", "<br/>")
-        story.append(Paragraph(safe_text or "[No final text]", body))
-        story.append(Spacer(1, 7))
+        story.append(CondPageBreak(65))
+        speaker = "Candidate" if entry["speaker"] == "candidate" else "RehearseAI"
+        stamp = _entry_time(entry.get("timestamp_utc"), started)
+        story.append(paragraph(f"{speaker} / {stamp}", label))
+        story.append(paragraph(_entry_state(entry), muted))
+        story.append(Spacer(1, 3))
+        story.append(paragraph(entry["text"] or "[No final text]"))
+        story.append(Spacer(1, 8))
+        story.append(HRFlowable(width="100%", thickness=0.4, color=RULE))
+        story.append(Spacer(1, 8))
 
     temp = path.with_name(f".{uuid.uuid4().hex}.tmp.pdf")
     try:
 
         def footer(canvas, doc):
             canvas.saveState()
+            canvas.setStrokeColor(RULE)
+            canvas.line(42, 38, A4[0] - 42, 38)
             canvas.setFont("RehearseNoto", 8)
-            canvas.setFillColor(colors.HexColor("#777777"))
-            canvas.drawString(42, 26, "RehearseAI - private interview transcript")
-            canvas.drawRightString(A4[0] - 42, 26, str(doc.page))
+            canvas.setFillColor(MUTED)
+            canvas.drawString(42, 25, "RehearseAI  /  Interview Transcript")
+            canvas.drawRightString(A4[0] - 42, 25, f"Page {doc.page}")
             canvas.restoreState()
 
         document = SimpleDocTemplate(
@@ -104,9 +189,9 @@ def build_pdf(path: Path, record: dict[str, Any], entries: list[dict[str, Any]])
             pagesize=A4,
             rightMargin=42,
             leftMargin=42,
-            topMargin=45,
-            bottomMargin=45,
-            title="RehearseAI interview transcript",
+            topMargin=43,
+            bottomMargin=56,
+            title="Interview Transcript",
         )
         document.build(story, onFirstPage=footer, onLaterPages=footer)
         os.chmod(temp, 0o600)
