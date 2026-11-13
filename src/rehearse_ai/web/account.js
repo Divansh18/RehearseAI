@@ -32,7 +32,9 @@ async function dashboard() {
   try {
     const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
     if (!response.ok) { location.assign('/login'); return; }
-    document.querySelector('#candidate-email').textContent = (await response.json()).email;
+    const account = await response.json();
+    document.querySelector('#candidate-email').textContent = account.email;
+    document.querySelector('#admin-link').hidden = account.role !== 'admin';
   } catch { show('Could not load your account. Refresh the page.', true); }
   document.querySelector('#logout').addEventListener('click', async () => {
     try { await post('/api/auth/logout'); location.assign('/login'); }
@@ -54,12 +56,14 @@ function account() {
   if (hasToken) history.replaceState(null, '', location.pathname);
   const token = hasToken;
   const modes = {
-    '/login': ['Sign in', 'Access your candidate dashboard.', 'Sign in'],
-    '/signup': ['Create account', 'Create an account, then sign in to continue.', 'Create account'],
+    '/login': ['Sign in', 'Continue to your interview workspace.', 'Sign in'],
+    '/signup': ['Create account', 'Create an account to access your interviews.', 'Create account'],
     '/verify': ['Verify email', 'A previously issued verification link may be used here.', 'Verify email'],
     '/reset-password': ['Reset password', 'Set a new password for your account.', 'Reset password'],
   };
   const [heading, copy, action] = modes[route] || modes['/login'];
+  document.title = `RehearseAI — ${heading}`;
+  document.querySelector(`.auth-nav a[href="${route}"]`)?.setAttribute('aria-current', 'page');
   title.textContent = heading;
   intro.textContent = copy;
   if (route === '/login' && reason === 'expired') {
@@ -93,6 +97,8 @@ function account() {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     submit.disabled = true;
+    const readyLabel = submit.textContent;
+    submit.textContent = 'Please wait…';
     try {
       const address = email.value.trim();
       if (route === '/login') { await post('/api/auth/login', { email: address, password: password.value }); location.assign('/dashboard'); return; }
@@ -101,7 +107,7 @@ function account() {
       if (route === '/reset-password' && token) { const result = await post('/api/auth/reset-password', { token, password: password.value }); show(result.message); }
       if (route === '/reset-password' && !token) { const result = await post('/api/auth/request-reset', { email: address }); show(result.message); }
     } catch (error) { show(error.message, true); }
-    finally { submit.disabled = false; }
+    finally { submit.disabled = false; submit.textContent = readyLabel; }
   });
   document.querySelector('#forgot').addEventListener('click', () => location.assign('/reset-password'));
 }

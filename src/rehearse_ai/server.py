@@ -145,7 +145,14 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.get("/assets/{name}")
     async def asset(name: str) -> Response:
-        if name not in {"app.js", "styles.css", "account.js", "account.css", "history.js"}:
+        if name not in {
+            "app.js",
+            "styles.css",
+            "account.js",
+            "account.css",
+            "history.js",
+            "theme.css",
+        }:
             raise HTTPException(404)
         path = WEB_DIR / name
         media = "text/javascript" if name.endswith(".js") else "text/css"

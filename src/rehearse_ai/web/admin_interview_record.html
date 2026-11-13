@@ -4,12 +4,13 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>RehearseAI — Admin interview record</title>
+  <link rel="stylesheet" href="/assets/theme.css?v=__BUILD_ID__">
   <link rel="stylesheet" href="/assets/account.css?v=__BUILD_ID__">
 </head>
 <body>
   <main class="dashboard-shell">
-    <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin interview viewer</p></div><button id="logout" type="button">Log out</button></header>
-    <div class="dashboard-title"><h1>Interview record</h1><p id="record-date">Loading…</p><p id="record-status"></p><p id="record-candidate"></p></div>
+    <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div><nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/dashboard">Overview</a><a href="/interview">Interview</a><a href="/admin/interviews" aria-current="page">Admin</a></div><details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details></nav></header>
+    <div class="dashboard-title"><div><span class="eyebrow">Admin record</span><h1>Interview record</h1><p id="record-date">Loading…</p><p id="record-status"></p><p id="record-candidate"></p></div><a class="secondary" href="/admin/interviews">Back to interviews</a></div>
     <section class="account-card">
       <h2>Transcript</h2>
       <p class="muted">Candidate speech is machine transcription. Assistant output status reflects server events, not confirmed browser playback.</p>

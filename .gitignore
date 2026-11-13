@@ -14,6 +14,7 @@ dist/
 sessions/
 private_pdfs/
 /output/pdf/
+/output/ui/
 logs/
 recordings/
 *.wav

@@ -3,21 +3,18 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#ffffff">
-    <title>RehearseAI — Interview practice</title>
+    <meta name="theme-color" content="#090f14">
+    <title>RehearseAI — Interview room</title>
+    <link rel="stylesheet" href="/assets/theme.css?v=__BUILD_ID__">
     <link rel="stylesheet" href="/assets/styles.css?v=__BUILD_ID__">
   </head>
   <body>
     <main class="shell">
       <header class="site-header">
-        <div class="identity">
-          <h1>RehearseAI</h1>
-          <p>A little practice before it matters.</p>
-        </div>
+        <div class="identity"><a class="brand" href="/dashboard">RehearseAI</a><p>Interview room</p></div>
         <nav class="account-nav" aria-label="Account">
-          <a href="/dashboard">Dashboard</a>
-          <a id="admin-link" href="/admin/interviews" hidden>Admin viewer</a>
-          <button id="logout" type="button">Log out</button>
+          <div class="top-nav"><a href="/dashboard">Overview</a><a href="/interview" aria-current="page">Interview</a><a id="admin-link" href="/admin/interviews" hidden>Admin</a></div>
+          <details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details>
         </nav>
         <div class="session-status" aria-label="Session status">
           <span id="status-dot" class="status-dot" aria-hidden="true"></span>
@@ -31,8 +28,9 @@
 
       <div class="content-grid">
         <section class="card interview-card" aria-labelledby="interview-heading">
+          <div class="room-identity" aria-hidden="true"><span class="room-mark">R</span><span><strong>RehearseAI</strong><small>AI interviewer</small></span></div>
           <div class="card-heading">
-            <h2 id="interview-heading">Interview</h2>
+            <div><span class="eyebrow">Interview stage</span><h2 id="interview-heading">Your interview</h2></div>
             <span id="question-count" class="progress" hidden>01 / 04</span>
           </div>
           <div id="question-progress" class="progress-track" role="img" aria-label="Interview has not started">
@@ -46,7 +44,7 @@
           <div class="interview-footer">
             <div class="controls">
               <button id="start" class="primary" type="button">Start interview</button>
-              <button id="end" class="secondary" type="button" disabled>End session</button>
+              <button id="end" class="danger" type="button" disabled>End interview</button>
             </div>
             <p class="disclosure">The coach’s voice is AI-generated. Allow microphone access when prompted.</p>
           </div>
@@ -61,7 +59,7 @@
             <li class="empty">Your conversation will appear here when you begin.</li>
           </ol>
           <div class="conversation-footer">
-            <button id="jump-latest" class="jump-latest" type="button" hidden>Jump to latest</button>
+            <button id="jump-latest" class="jump-latest" type="button" hidden>Latest messages</button>
           </div>
         </section>
       </div>

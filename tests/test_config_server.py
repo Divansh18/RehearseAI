@@ -106,6 +106,8 @@ def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
         assert page.headers["cache-control"] == "no-store"
         assert client.get("/assets/app.js").status_code == 200
         assert client.get("/assets/styles.css").status_code == 200
+        theme = client.get("/assets/theme.css")
+        assert theme.status_code == 200 and theme.headers["content-type"].startswith("text/css")
         assert client.get("/assets/account.js").status_code == 200
         assert client.get("/interview", follow_redirects=False).status_code == 303
         assert client.post("/api/offer", json={"type": "bad"}).status_code == 401

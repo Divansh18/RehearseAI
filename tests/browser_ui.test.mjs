@@ -164,14 +164,14 @@ test('transcript does not snap back when reader has scrolled up', () => {
 
 test('a long transcript keeps chronological turns while the reader stays scrolled back', () => {
   const { nodes, send } = fixture();
-  for (let index = 1; index <= 50; index += 1) {
+  for (let index = 1; index <= 100; index += 1) {
     send({ event: 'candidate_final', answer_number: index, text: `Answer ${index}` });
   }
-  assert.equal(nodes.transcript.children.length, 50);
+  assert.equal(nodes.transcript.children.length, 100);
   assert.match(nodes.transcript.children[0].textContent, /Answer 1/);
-  assert.match(nodes.transcript.children[49].textContent, /Answer 50/);
+  assert.match(nodes.transcript.children[99].textContent, /Answer 100/);
   nodes.transcript.scrollTop = 80;
-  send({ event: 'candidate_final', answer_number: 51, text: 'Answer 51' });
+  send({ event: 'candidate_final', answer_number: 101, text: 'Answer 101' });
   assert.equal(nodes.transcript.scrollTop, 80);
   assert.equal(nodes['jump-latest'].hidden, false);
 });
