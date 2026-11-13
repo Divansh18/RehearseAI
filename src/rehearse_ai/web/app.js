@@ -14,9 +14,17 @@ const progressTrack = document.querySelector('#question-progress');
 const errorLabel = document.querySelector('#error');
 const audio = document.querySelector('#remote-audio');
 const logoutButton = document.querySelector('#logout');
+const beginButton = document.querySelector('#begin-interview');
+const resumeButton = document.querySelector('#resume');
+const setupEndButton = document.querySelector('#end-setup');
+const setupPanel = document.querySelector('#setup-panel');
+const workspace = document.querySelector('#interview-workspace');
 let peer = null;
 let microphone = null;
 let channel = null;
+let mediaSetup = null;
+let mediaPaused = false;
+let beginSent = false;
 const utterances = new Map();
 const prepared = new Map();
 const answers = new Map();
@@ -78,6 +86,7 @@ function microphoneState() {
 }
 
 function setStatus(label) {
+  if (mediaPaused && !['Paused', 'Error', 'Ended', 'Finishing'].includes(label)) return;
   connectionLabel.textContent = label;
   microphoneLabel.textContent = microphoneState();
   statusDot.dataset.state = label.toLowerCase();
@@ -166,6 +175,21 @@ function handleEvent(message) {
   const entry = message.event;
   if (!entry || !entry.event) return;
   if (terminalPending || sessionClosed && attempt > 0) return;
+  if (entry.event === 'media_paused') {
+    mediaPaused = true;
+    setStatus('Paused');
+    return;
+  }
+  if (entry.event === 'media_resumed') {
+    mediaPaused = false;
+    resumeButton.hidden = true;
+    setupEndButton.hidden = true;
+    setupPanel.hidden = true;
+    workspace.hidden = false;
+    guidance.textContent = 'Continue when you’re ready.';
+    setStatus('Listening');
+    return;
+  }
 
   if (entry.event === 'session_started') {
     document.querySelector('#session-id').textContent = `Session ${entry.session_id}`;
@@ -256,6 +280,8 @@ function finishSession({ manual = false } = {}) {
   if (sessionClosed) return;
   sessionClosed = true;
   terminalPending = true;
+  mediaPaused = false;
+  beginSent = false;
   attempt += 1;
   if (cleanupTimeout !== null) clearTimeout(cleanupTimeout);
   cleanupTimeout = null;
@@ -266,13 +292,20 @@ function finishSession({ manual = false } = {}) {
   channel = null;
   peer?.close();
   peer = null;
-  microphone?.getTracks().forEach((track) => track.stop());
+  if (mediaSetup) mediaSetup.cleanup();
+  else microphone?.getTracks().forEach((track) => track.stop());
   microphone = null;
   audio.pause();
   audio.srcObject = null;
   startButton.disabled = false;
+  startButton.hidden = false;
   startButton.textContent = 'Start again';
   endButton.disabled = true;
+  resumeButton.hidden = true;
+  setupEndButton.hidden = true;
+  beginButton.hidden = false;
+  setupPanel.hidden = true;
+  workspace.hidden = false;
   if (manual) {
     setInterviewPhase('Ended', 'Session ended.');
     questionCount.hidden = true;
@@ -283,6 +316,77 @@ function finishSession({ manual = false } = {}) {
 }
 
 function endSession() { finishSession({ manual: true }); }
+
+function sendMediaAction(action, reason) {
+  if (channel?.readyState === 'open') {
+    channel.send(JSON.stringify({ type: 'rehearseai_media', action, reason }));
+    return true;
+  }
+  return false;
+}
+
+function mediaLost(kind) {
+  if (sessionClosed || terminalPending || mediaPaused) return;
+  mediaPaused = true;
+  guidance.textContent = `${kind} stopped. Restore it, then choose Resume interview.`;
+  document.querySelector('#setup-message').textContent = `${kind} stopped. Restore it, then choose Resume interview.`;
+  setupPanel.hidden = false;
+  workspace.hidden = true;
+  beginButton.hidden = true;
+  resumeButton.hidden = false;
+  setupEndButton.hidden = false;
+  resumeButton.disabled = true;
+  setStatus('Paused');
+  // Before Begin, readiness alone blocks the greeting; there is no server turn to pause.
+  if (beginSent) sendMediaAction('pause', kind.toLowerCase().replaceAll(' ', '_'));
+}
+
+async function resumeInterview() {
+  if (!mediaPaused || !mediaSetup?.ready() || sessionClosed) return;
+  resumeButton.disabled = true;
+  if (microphone !== mediaSetup.microphone) {
+    const sender = peer?.getSenders().find((item) => item.track?.kind === 'audio');
+    if (!sender) { showError('Microphone connection could not be restored. End and start again.'); resumeButton.disabled = false; return; }
+    try {
+      await sender.replaceTrack(mediaSetup.microphone.getAudioTracks()[0]);
+    } catch {
+      showError('Microphone connection could not be restored. End and start again.');
+      resumeButton.disabled = false;
+      return;
+    }
+    microphone = mediaSetup.microphone;
+  }
+  if (!channel || channel.readyState !== 'open') {
+    document.querySelector('#setup-message').textContent = 'Voice connection is not ready. Wait a moment and try Resume, or end the interview.';
+    resumeButton.disabled = false;
+    return;
+  }
+  if (beginSent) {
+    sendMediaAction('resume');
+    guidance.textContent = 'Restoring the voice turn. Wait for Listening before continuing.';
+  } else {
+    beginSent = sendMediaAction('begin');
+    mediaPaused = false;
+    resumeButton.hidden = true;
+    setupEndButton.hidden = true;
+    beginButton.hidden = false;
+    setupPanel.hidden = true;
+    workspace.hidden = false;
+    guidance.textContent = 'Continue when you’re ready.';
+    setStatus('Listening');
+  }
+}
+
+function showSetup() {
+  if (!sessionClosed) return;
+  setupPanel.hidden = false;
+  workspace.hidden = true;
+  beginButton.hidden = false;
+  startButton.hidden = true;
+  endButton.disabled = true;
+  setStatus('Ready');
+  mediaSetup?.update();
+}
 
 function scheduleAutomaticEnd() {
   terminalPending = true;
@@ -313,10 +417,12 @@ async function waitForIce(pc) {
 }
 
 async function startSession() {
-  if (!sessionClosed) return;
+  if (!sessionClosed || !mediaSetup?.ready()) return;
   const thisAttempt = ++attempt;
   sessionClosed = false;
   terminalPending = false;
+  mediaPaused = false;
+  beginSent = false;
   stopTimer();
   elapsed.textContent = '00:00';
   errorLabel.hidden = true;
@@ -334,41 +440,36 @@ async function startSession() {
   questionCount.hidden = true;
   setProgress();
   startButton.disabled = true;
+  startButton.hidden = true;
   endButton.disabled = false;
+  setupPanel.hidden = true;
+  workspace.hidden = false;
+  setupEndButton.hidden = true;
+  resumeButton.hidden = true;
+  beginButton.hidden = false;
   setStatus('Connecting');
 
   try {
     if (!await checkAccount()) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Microphone access requires a supported browser on localhost.');
-    }
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-    });
-    if (thisAttempt !== attempt) {
-      stream.getTracks().forEach((track) => track.stop());
-      return;
-    }
-    microphone = stream;
-    microphone.getAudioTracks().forEach((track) => {
-      track.addEventListener('ended', () => {
-        if (thisAttempt === attempt && microphone === stream) {
-          showError('Microphone access stopped. End the session, then allow access and restart.');
-        }
-      });
-    });
+    if (!mediaSetup.ready()) throw new Error('A required device stopped. Restore it in setup before beginning.');
+    microphone = mediaSetup.microphone;
     setStatus('Connecting');
     peer = new RTCPeerConnection();
     microphone.getAudioTracks().forEach((track) => peer.addTrack(track, microphone));
     channel = peer.createDataChannel('rehearseai');
     const activeChannel = channel;
+    channel.onopen = () => {
+      if (thisAttempt !== attempt || mediaPaused || !mediaSetup.ready()) return;
+      beginSent = sendMediaAction('begin');
+    };
     channel.onmessage = (event) => {
       if (thisAttempt !== attempt) return;
       try { handleEvent(JSON.parse(event.data)); } catch { /* Ignore unrelated data. */ }
     };
     channel.onclose = () => {
       if (thisAttempt === attempt && channel === activeChannel && peer) {
-        showError('The session connection closed. End and restart the session.');
+        endSession();
+        showError('The session connection closed. Check your connection, then start again.');
       }
     };
     peer.ontrack = (event) => {
@@ -386,7 +487,8 @@ async function startSession() {
         setStatus('Listening');
       }
       if (['failed', 'disconnected'].includes(peer.connectionState)) {
-        showError('Connection lost. End and restart the session.');
+        endSession();
+        showError('Connection lost. Check your connection, then start again.');
       }
     };
     await peer.setLocalDescription(await peer.createOffer());
@@ -418,15 +520,19 @@ async function startSession() {
     if (thisAttempt !== attempt) return;
     endSession();
     showError(error.name === 'NotAllowedError'
-      ? 'Microphone permission was denied. Allow access in your browser and try again.'
+      ? 'Media permission was denied. Allow access in your browser and try again.'
       : error.message);
   }
 }
 
-startButton.addEventListener('click', startSession);
+startButton.addEventListener('click', showSetup);
+beginButton.addEventListener('click', startSession);
+resumeButton.addEventListener('click', resumeInterview);
 endButton.addEventListener('click', endSession);
+setupEndButton.addEventListener('click', endSession);
 logoutButton.addEventListener('click', async () => {
   endSession();
+  mediaSetup?.cleanup();
   try {
     const csrfResponse = await fetch('/api/csrf', { credentials: 'same-origin' });
     if (!csrfResponse.ok) throw new Error('Could not sign out securely. Refresh and try again.');
@@ -441,6 +547,21 @@ logoutButton.addEventListener('click', async () => {
   } catch (error) { showError(error.message); }
 });
 window.addEventListener('DOMContentLoaded', () => {
+  mediaSetup = new window.RehearseMediaSetup({
+    onChange: (ready) => {
+      beginButton.disabled = !ready || !sessionClosed;
+      if (mediaPaused) resumeButton.disabled = !ready;
+    },
+    onLoss: mediaLost,
+  });
+  if (!mediaSetup.supported()) {
+    document.querySelector('#setup-message').textContent = 'Screen sharing requires a supported desktop browser on localhost or HTTPS. This device cannot begin the interview.';
+  }
+  document.querySelector('#enable-devices').addEventListener('click', () => mediaSetup.enableDevices());
+  document.querySelector('#share-screen').addEventListener('click', () => mediaSetup.shareScreen());
+  document.querySelector('#test-speaker').addEventListener('click', () => mediaSetup.testSpeaker());
+  document.querySelector('#confirm-speaker').addEventListener('click', () => mediaSetup.confirmSpeaker());
+  document.querySelector('#cancel-setup').addEventListener('click', () => mediaSetup.cleanup());
   checkAccount().catch((error) => showError(error.message));
 });
-window.addEventListener('pagehide', endSession);
+window.addEventListener('pagehide', () => { endSession(); mediaSetup?.cleanup(); });

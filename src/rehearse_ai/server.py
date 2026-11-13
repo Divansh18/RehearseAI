@@ -147,6 +147,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def asset(name: str) -> Response:
         if name not in {
             "app.js",
+            "media_setup.js",
             "styles.css",
             "account.js",
             "account.css",

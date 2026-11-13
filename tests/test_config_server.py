@@ -1,5 +1,6 @@
 import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,7 +10,8 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 
 from rehearse_ai.config import ConfigurationError, Settings
-from rehearse_ai.pipeline import LiveSession
+from rehearse_ai.interview import Stage
+from rehearse_ai.pipeline import InterviewInput, LiveSession
 from rehearse_ai.server import create_app
 
 AUTH_ENV = {
@@ -105,6 +107,7 @@ def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
         assert "Create account" in page.text
         assert page.headers["cache-control"] == "no-store"
         assert client.get("/assets/app.js").status_code == 200
+        assert client.get("/assets/media_setup.js").status_code == 200
         assert client.get("/assets/styles.css").status_code == 200
         theme = client.get("/assets/theme.css")
         assert theme.status_code == 200 and theme.headers["content-type"].startswith("text/css")
@@ -135,6 +138,43 @@ async def test_locked_pipecat_pipeline_assembles_without_provider_calls(tmp_path
     await live.stop()
     await connection.disconnect()
     assert live.log.path.exists()
+
+
+@pytest.mark.asyncio
+async def test_voice_session_waits_for_explicit_begin_control(tmp_path):
+    settings = Settings(
+        deepgram_api_key="test-dg",
+        openai_api_key="test-oa",
+        cartesia_api_key="test-ca",
+        session_dir=tmp_path,
+    )
+    connection = SmallWebRTCConnection()
+    live = LiveSession(connection, settings)
+    live.session._queue_speech = AsyncMock()
+    assert live.session.controller.stage is Stage.NEW
+    await live._transport._call_event_handler("on_client_connected", connection)
+    assert live.session.controller.stage is Stage.NEW
+    await live._transport._call_event_handler(
+        "on_app_message", {"type": "rehearseai_media", "action": "pause"}, "candidate"
+    )
+    await asyncio.sleep(0)
+    assert live.session.controller.stage is Stage.NEW
+    assert not live.session.media_paused
+    assert not next(
+        processor for processor in live.pipeline.processors if isinstance(processor, InterviewInput)
+    )._media_paused
+    await live._transport._call_event_handler(
+        "on_app_message", {"type": "rehearseai_media", "action": "begin"}, "candidate"
+    )
+    await asyncio.sleep(0)
+    assert live.session.controller.stage is Stage.DELIVERING
+    await live._transport._call_event_handler(
+        "on_app_message", {"type": "rehearseai_media", "action": "begin"}, "candidate"
+    )
+    await asyncio.sleep(0)
+    assert live.session._queue_speech.await_count == 1
+    await live.stop()
+    await connection.disconnect()
 
 
 @pytest.mark.asyncio

@@ -415,6 +415,7 @@ class InterviewSession:
         self._build_id = build_id
         self._stop_latched = False
         self._closed = False
+        self._media_paused = False
         self._answer_snapshot: tuple[str, ...] | None = None
         self._latest_candidate_turn = ""
         self._opening_interpret_text: str | None = None
@@ -429,6 +430,67 @@ class InterviewSession:
     @property
     def response_task(self) -> asyncio.Task[None] | None:
         return self._response_task
+
+    @property
+    def media_paused(self) -> bool:
+        return self._media_paused
+
+    async def media_pause(self, reason: str) -> None:
+        if (
+            self._closed
+            or self._media_paused
+            or self.controller.stage
+            in {Stage.NEW, Stage.COMPLETE, Stage.ENDED_EARLY, Stage.EARLY_CLOSING}
+        ):
+            return
+        self._media_paused = True
+        self._generation += 1
+        task = self._response_task
+        if task and not task.done():
+            task.cancel()
+        self._response_task = None
+        pending = self.controller.pending
+        if pending is not None and self.controller.interrupt(pending.id):
+            if pending.id in self._output_started_ids:
+                self._cancelled_output_stop_debt += 1
+            self._speaking_id = None
+            self._tts_contexts = {
+                context: identifier
+                for context, identifier in self._tts_contexts.items()
+                if identifier != pending.id
+            }
+            self._record(
+                "agent_interrupted",
+                speaker="agent",
+                utterance_id=pending.id,
+                text=pending.text,
+                interrupted=True,
+                output_started=pending.id in self._output_started_ids,
+                cancellation_reason="media_lost",
+            )
+            self._record(
+                "agent_cancellation",
+                speaker=None,
+                utterance_id=pending.id,
+                cancellation_reason="media_lost",
+            )
+        self._record("media_paused", speaker=None, reason=reason)
+        if self._cancel_audio:
+            await self._cancel_audio()
+
+    async def media_resume(self) -> None:
+        if self._closed or not self._media_paused:
+            return
+        self._media_paused = False
+        self._record("media_resumed", speaker=None)
+        if self.controller.interrupted_utterance is not None:
+            await self._queue_speech(self.controller.retry_interrupted())
+        elif self.controller.stage in {
+            Stage.AWAITING_PROPOSAL,
+            Stage.AWAITING_OPENING_ACK,
+            Stage.AWAITING_FEEDBACK,
+        }:
+            self._start_response()
 
     def _record(self, event: str, **details: Any) -> None:
         entry = self.log.record(event, **details)
@@ -709,6 +771,7 @@ class InterviewSession:
     async def detect_stop_from_segments(self, text: str) -> bool:
         if (
             self._closed
+            or self._media_paused
             or self._stop_latched
             or self.controller.stage
             in {
@@ -724,7 +787,7 @@ class InterviewSession:
         return True
 
     async def start(self) -> None:
-        if self._closed or self.controller.stage is not Stage.NEW:
+        if self._closed or self._media_paused or self.controller.stage is not Stage.NEW:
             return
         self._record("session_started", speaker=None, build_id=self._build_id)
         await self._queue_speech(self.controller.start())
@@ -732,6 +795,7 @@ class InterviewSession:
     async def _queue_speech(self, utterance: Utterance) -> None:
         if (
             self._closed
+            or self._media_paused
             or self.controller.pending != utterance
             or (self._stop_latched and utterance.kind is not UtteranceKind.EARLY_FEEDBACK)
         ):
@@ -764,7 +828,11 @@ class InterviewSession:
             )
 
     async def user_started(self) -> None:
-        if self._closed or self.controller.stage in {Stage.COMPLETE, Stage.ENDED_EARLY}:
+        if (
+            self._closed
+            or self._media_paused
+            or self.controller.stage in {Stage.COMPLETE, Stage.ENDED_EARLY}
+        ):
             return
         self._generation += 1
         task = self._response_task
@@ -819,7 +887,11 @@ class InterviewSession:
         segment_count: int | None = None,
         boundary_frame_id: int | None = None,
     ) -> None:
-        if self._closed or self.controller.stage in {Stage.COMPLETE, Stage.ENDED_EARLY}:
+        if (
+            self._closed
+            or self._media_paused
+            or self.controller.stage in {Stage.COMPLETE, Stage.ENDED_EARLY}
+        ):
             return
         answer = text.strip()
         self._last_turn_end = time.perf_counter()
@@ -1417,7 +1489,9 @@ class InterviewSession:
                 )
 
     def _start_response(self) -> None:
-        if self._stop_latched and self.controller.stage is not Stage.EARLY_CLOSING:
+        if self._media_paused or (
+            self._stop_latched and self.controller.stage is not Stage.EARLY_CLOSING
+        ):
             return
         self._generation += 1
         generation = self._generation
@@ -2422,7 +2496,7 @@ class InterviewSession:
         )
 
     def tts_audio_chunk(self, context_id: str | None, byte_count: int) -> bool:
-        if self._closed:
+        if self._closed or self._media_paused:
             return False
         pending = self.controller.pending
         if (
@@ -2486,6 +2560,8 @@ class InterviewSession:
         return True
 
     def bot_started(self) -> None:
+        if self._media_paused:
+            return
         pending = self.controller.pending
         if pending is None or self._closed or self._speaking_id == pending.id:
             return
@@ -2520,6 +2596,8 @@ class InterviewSession:
         )
 
     def bot_stopped(self) -> None:
+        if self._media_paused:
+            return
         if self._cancelled_output_stop_debt:
             self._cancelled_output_stop_debt -= 1
             self._record("cancelled_output_stop_ignored", speaker=None)

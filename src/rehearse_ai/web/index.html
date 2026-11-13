@@ -26,7 +26,21 @@
         </div>
       </header>
 
-      <div class="content-grid">
+      <section id="setup-panel" class="card setup-panel" aria-labelledby="setup-heading">
+        <div class="setup-heading"><div><span class="eyebrow">Before your interview</span><h1 id="setup-heading">Check your media</h1></div><a href="/dashboard" id="cancel-setup" class="button secondary">Back to overview</a></div>
+        <p class="setup-disclosure">Your camera and shared screen are previewed locally in this version. They are not recorded or analysed. Interview audio is processed by the voice services, and the conversation is saved.</p>
+        <div class="setup-previews">
+          <div class="preview-panel"><span class="preview-label">Camera preview</span><video id="camera-preview" autoplay muted playsinline aria-label="Local camera preview"></video></div>
+          <div class="preview-panel"><span class="preview-label">Screen preview</span><video id="screen-preview" autoplay muted playsinline aria-label="Local shared screen preview"></video></div>
+        </div>
+        <div class="setup-tools">
+          <div class="setup-tool"><button id="enable-devices" class="secondary" type="button">Enable camera and microphone</button><label for="mic-level">Microphone input level</label><meter id="mic-level" min="0" max="1" value="0">0</meter></div>
+          <div class="setup-tool"><button id="share-screen" class="secondary" type="button">Share screen</button><button id="test-speaker" class="secondary" type="button">Test speaker</button><button id="confirm-speaker" class="secondary" type="button" disabled>I heard the tone</button></div>
+        </div>
+        <div class="setup-bottom"><div><h2>Readiness</h2><ul class="readiness-list"><li id="check-microphone">Microphone <span>Needed</span></li><li id="check-camera">Camera preview <span>Needed</span></li><li id="check-screen">Screen preview <span>Needed</span></li><li id="check-speaker">Speaker test <span>Needed</span></li></ul><p id="setup-message" class="setup-message" role="status" aria-live="polite">Use the controls above to check your devices.</p></div><div class="setup-actions"><button id="begin-interview" class="primary" type="button" disabled>Begin interview</button><button id="resume" class="primary" type="button" hidden>Resume interview</button><button id="end-setup" class="danger" type="button" hidden>End interview</button></div></div>
+      </section>
+
+      <div id="interview-workspace" class="content-grid" hidden>
         <section class="card interview-card" aria-labelledby="interview-heading">
           <div class="room-identity" aria-hidden="true"><span class="room-mark">R</span><span><strong>RehearseAI</strong><small>AI interviewer</small></span></div>
           <div class="card-heading">
@@ -43,7 +57,7 @@
           <p id="guidance" class="guidance">Take a moment to find a project you’d like to talk about.</p>
           <div class="interview-footer">
             <div class="controls">
-              <button id="start" class="primary" type="button">Start interview</button>
+              <button id="start" class="primary" type="button" hidden>Start again</button>
               <button id="end" class="danger" type="button" disabled>End interview</button>
             </div>
             <p class="disclosure">The coach’s voice is AI-generated. Allow microphone access when prompted.</p>
@@ -73,6 +87,7 @@
       </details>
       <audio id="remote-audio" autoplay></audio>
     </main>
+    <script src="/assets/media_setup.js?v=__BUILD_ID__" defer></script>
     <script src="/assets/app.js?v=__BUILD_ID__" defer></script>
   </body>
 </html>

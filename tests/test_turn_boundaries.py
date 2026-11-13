@@ -109,6 +109,100 @@ async def test_multiple_final_stt_segments_one_turn_and_one_decision(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_media_pause_discards_partial_segments_without_advancing(tmp_path):
+    decisions = []
+    input_adapter = InterviewInput()
+
+    async def push(_frame, _direction=FrameDirection.DOWNSTREAM):
+        pass
+
+    async def cancel():
+        pass
+
+    async def infer(kind, payload):
+        decisions.append((kind, payload))
+        return {"action": "advance", "text": ""}
+
+    input_adapter.push_frame = push
+    session = InterviewSession(
+        SessionLog(tmp_path, "media-partial"),
+        infer,
+        input_adapter.speak,
+        lambda _: None,
+        cancel_audio=cancel,
+    )
+    input_adapter.session = session
+    await start_questions(session)
+    deliver(session)
+    await input_adapter.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await input_adapter.process_frame(final("I built the first half", 1), FrameDirection.DOWNSTREAM)
+    input_adapter.set_media_paused(True)
+    await session.media_pause("screen_sharing")
+    assert input_adapter.request_resume() is False
+    await input_adapter.process_frame(final("stale text", 2), FrameDirection.DOWNSTREAM)
+    assert session.controller.answers[0] == ()
+    assert decisions == []
+    await input_adapter.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    assert not session.media_paused
+    await input_adapter.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await input_adapter.process_frame(final("I built a parser", 3), FrameDirection.DOWNSTREAM)
+    await input_adapter.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await settle()
+    assert session.controller.answers[0] == ("I built a parser",)
+    assert len(decisions) == 1
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_media_pause_cancels_output_and_resume_requeues_fresh_id(tmp_path):
+    spoken = []
+    published = []
+
+    async def speak(utterance):
+        spoken.append(utterance)
+
+    async def cancel():
+        pass
+
+    session = InterviewSession(
+        SessionLog(tmp_path, "media-output"),
+        lambda *_: None,
+        speak,
+        published.append,
+        cancel_audio=cancel,
+    )
+    await start_questions(session)
+    original = session.controller.pending
+    begin_output(session)
+    await session.media_pause("camera")
+    assert session.media_paused
+    assert session.controller.pending is None
+    session.tts_finished(f"context-{original.id}")
+    session.bot_stopped()
+    assert not any(
+        entry["event"]["event"] == "agent_delivery_reported"
+        and entry["event"]["utterance_id"] == original.id
+        for entry in published
+    )
+    assert not session.tts_audio_chunk(f"context-{original.id}", 320)
+    await session.media_resume()
+    replacement = session.controller.pending
+    assert replacement.id != original.id
+    assert replacement.text == original.text
+    deliver(session)
+    assert session.controller.current_question_number == 1
+    assert (
+        sum(
+            entry["event"]["event"] == "agent_delivery_reported"
+            and entry["event"]["utterance_id"] == replacement.id
+            for entry in published
+        )
+        == 1
+    )
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_split_stt_correction_updates_memory_without_answer_or_decision(tmp_path):
     input_adapter = InterviewInput()
     input_adapter.push_frame = lambda _frame, _direction=FrameDirection.DOWNSTREAM: settle()

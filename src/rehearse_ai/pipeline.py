@@ -37,7 +37,7 @@ from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from rehearse_ai.config import Settings
-from rehearse_ai.interview import Utterance
+from rehearse_ai.interview import Stage, Utterance
 from rehearse_ai.prompts import load_prompt
 from rehearse_ai.session import InterviewSession
 from rehearse_ai.session_log import SessionLog
@@ -119,6 +119,24 @@ class InterviewInput(FrameProcessor):
         self.session: InterviewSession | None = None
         self._segments: list[str] = []
         self._turn_open = False
+        self._media_paused = False
+        self._discard_until_boundary = False
+        self._resume_requested = False
+
+    def set_media_paused(self, paused: bool) -> None:
+        if paused:
+            self._discard_until_boundary = self._turn_open or bool(self._segments)
+            self._resume_requested = False
+        self._media_paused = paused
+        self._segments.clear()
+        self._turn_open = False
+
+    def request_resume(self) -> bool:
+        if self._discard_until_boundary:
+            self._resume_requested = True
+            return False
+        self.set_media_paused(False)
+        return True
 
     async def speak(self, utterance: Utterance) -> None:
         if self.session is None or self.session.controller.pending != utterance:
@@ -133,6 +151,26 @@ class InterviewInput(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
+        if (
+            self._media_paused
+            and direction is FrameDirection.DOWNSTREAM
+            and isinstance(
+                frame,
+                (
+                    UserStartedSpeakingFrame,
+                    UserStoppedSpeakingFrame,
+                    VADUserStartedSpeakingFrame,
+                    VADUserStoppedSpeakingFrame,
+                    TranscriptionFrame,
+                ),
+            )
+        ):
+            if isinstance(frame, UserStoppedSpeakingFrame):
+                self._discard_until_boundary = False
+                if self._resume_requested and self.session is not None:
+                    self.set_media_paused(False)
+                    await self.session.media_resume()
+            return
         if direction is FrameDirection.DOWNSTREAM and self.session is not None:
             if isinstance(frame, UserStartedSpeakingFrame):
                 if not self._turn_open:
@@ -257,6 +295,7 @@ class LiveSession:
             webrtc_connection=connection,
             params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),
         )
+        self._transport = transport
         llm = OpenAILLMService(
             api_key=settings.openai_api_key,
             settings=OpenAILLMService.Settings(model=settings.llm_model),
@@ -330,13 +369,26 @@ class LiveSession:
                 exception_type=(type(frame.exception).__name__ if frame.exception else None),
             )
 
-        @transport.event_handler("on_client_connected")
-        async def connected(_transport: SmallWebRTCTransport, _client: Any) -> None:
-            await self.session.start()
-
         @transport.event_handler("on_client_disconnected")
         async def disconnected(_transport: SmallWebRTCTransport, _client: Any) -> None:
             await self.stop()
+
+        @transport.event_handler("on_app_message")
+        async def app_message(_transport: SmallWebRTCTransport, message: Any, _sender: str) -> None:
+            if not isinstance(message, dict) or message.get("type") != "rehearseai_media":
+                return
+            if message.get("action") == "begin":
+                await self.session.start()
+            elif (
+                message.get("action") == "pause"
+                and not self.session.media_paused
+                and self.session.controller.stage is not Stage.NEW
+            ):
+                input_adapter.set_media_paused(True)
+                await self.session.media_pause(str(message.get("reason", "media_lost"))[:40])
+            elif message.get("action") == "resume" and self.session.media_paused:
+                if input_adapter.request_resume():
+                    await self.session.media_resume()
 
     async def run(self) -> None:
         failed = False

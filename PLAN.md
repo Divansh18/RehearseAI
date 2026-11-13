@@ -1,5 +1,12 @@
 # RehearseAI implementation plan
 
+## Pre-interview media setup (current)
+
+- The authenticated `/interview` page starts in a local setup phase: explicit camera/microphone and screen permission actions, muted local previews, microphone level, speaker tone with candidate confirmation, and a live-track readiness checklist. Begin rechecks all requirements and starts the existing audio-only SmallWebRTC connection; camera and screen never enter that connection.
+- SmallWebRTC waits for an authenticated data-channel `begin` control before `InterviewSession.start()`, so a page visit or merely opening a peer cannot start the greeting. On track loss after Begin, a `pause` control cancels current inference/output, blocks new candidate turns and delivery acknowledgments, and preserves controller state. The setup panel reopens with Resume and End controls; `resume` waits for any interrupted Pipecat user-turn boundary, then restores the pending utterance with a fresh ID or resumes inference. Loss before Begin blocks readiness without pausing a nonexistent server turn.
+- Acceptance: no greeting before Begin; missing/ended tracks disable Begin; a silent live mic is valid; partial speech at media loss cannot become an answer; cancelled audio cannot be acknowledged; restored media plus explicit Resume retains question/probe state. Browser device permission and actual microphone/audio behaviour need manual verification.
+- Limits: setup reports browser track state, not independent server proof; mobile screen capture may be unavailable. The existing 30-second Pipecat turn watchdog can delay recovery if a stopped microphone never yields an ordinary turn boundary. No recording, video analysis, remote viewing, scheduling, or provider changes are in this milestone.
+
 ## Candidate platform milestone 3: persistent interviews and admin review
 
 Implemented before scheduling. Reuse the existing account session and database-backed `is_superuser` flag; only `python -m rehearse_ai.admin <active-email>` grants admin. `0003_interview_records` adds account-owned attempts and event-ordered transcript rows with unique event and utterance keys. The WebRTC connection callback creates `starting`; `session_started` marks `in_progress`; controller completion marks `completed`, spoken early closing marks `ended_early`, disconnect marks `interrupted`, and unexpected worker failure marks `failed`. Terminal states ignore late lifecycle changes. Browser page visits never create attempts.
