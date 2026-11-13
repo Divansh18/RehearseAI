@@ -84,21 +84,24 @@ async function loadDetail() {
   const admin = location.pathname.startsWith('/admin');
   const id = location.pathname.split('/').at(-1);
   const base = `/api/${admin ? 'admin/' : ''}interviews/${id}`;
-  const [record, transcript] = await Promise.all([getJson(base), getJson(`${base}/transcript`)]);
+  const record = await getJson(base);
   document.querySelector('#record-date').textContent = `Started: ${utc(record.started_at)} · Ended: ${utc(record.ended_at)}`;
   document.querySelector('#record-status').textContent = `Status: ${label(record.status)}${record.termination_reason ? ` (${label(record.termination_reason)})` : ''}`;
   if (record.candidate_email) document.querySelector('#record-candidate').textContent = record.candidate_email;
-  const conversation = document.querySelector('#conversation');
-  conversation.replaceChildren();
-  transcript.forEach((entry) => {
-    const block = item('article', '', 'conversation-item');
-    block.append(item('strong', entry.speaker === 'candidate' ? 'You' : 'RehearseAI'));
-    block.append(item('small', `${utc(entry.timestamp_utc)} · ${label(entry.status)}`));
-    block.append(item('p', entry.text));
-    conversation.append(block);
-  });
-  if (!transcript.length) conversation.append(item('p', 'No final conversation text is saved yet.', 'muted'));
-  if (!admin) return;
+  if (!admin) {
+    const transcript = await getJson(`${base}/transcript`);
+    const conversation = document.querySelector('#conversation');
+    conversation.replaceChildren();
+    transcript.forEach((entry) => {
+      const block = item('article', '', 'conversation-item');
+      block.append(item('strong', entry.speaker === 'candidate' ? 'You' : 'RehearseAI'));
+      block.append(item('small', `${utc(entry.timestamp_utc)} · ${label(entry.status)}`));
+      block.append(item('p', entry.text));
+      conversation.append(block);
+    });
+    if (!transcript.length) conversation.append(item('p', 'No final conversation text is saved yet.', 'muted'));
+    return;
+  }
   const state = document.querySelector('#pdf-state');
   const download = document.querySelector('#pdf-link');
   const regenerate = document.querySelector('#pdf-regenerate');
@@ -109,14 +112,14 @@ async function loadDetail() {
     download.href = `${base}/pdf`;
     download.hidden = false;
   } else if (record.pdf_status === 'failed') {
-    state.textContent = 'PDF generation failed. The saved conversation is still available.';
+    state.textContent = 'Generation failed. The saved conversation remains available for regeneration.';
     regenerate.hidden = false;
     regenerate.addEventListener('click', async () => {
       try { await securePost(`${base}/pdf/regenerate`); state.textContent = 'PDF regeneration queued. Refresh shortly.'; regenerate.hidden = true; }
       catch (error) { show(error.message); }
     });
   } else {
-    state.textContent = 'PDF generation pending. Refresh shortly.';
+    state.textContent = 'Preparing conversation PDF. Refresh shortly.';
   }
 }
 

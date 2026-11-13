@@ -7,8 +7,6 @@ const phaseLabel = document.querySelector('#phase-label');
 const questionLabel = document.querySelector('#question');
 const questionCount = document.querySelector('#question-count');
 const guidance = document.querySelector('#guidance');
-const transcript = document.querySelector('#transcript');
-const jumpLatest = document.querySelector('#jump-latest');
 const elapsed = document.querySelector('#elapsed');
 const progressTrack = document.querySelector('#question-progress');
 const errorLabel = document.querySelector('#error');
@@ -18,6 +16,11 @@ const beginButton = document.querySelector('#begin-interview');
 const resumeButton = document.querySelector('#resume');
 const setupPanel = document.querySelector('#setup-panel');
 const workspace = document.querySelector('#interview-workspace');
+const roomTitle = document.querySelector('#room-title');
+const returnButton = document.querySelector('#return-overview');
+const snapshotConsent = document.querySelector('#snapshot-consent');
+const snapshotStatus = document.querySelector('#snapshot-status');
+const setupError = document.querySelector('#setup-error');
 const aiState = document.querySelector('#ai-state');
 const aiPresence = document.querySelector('#ai-presence');
 const cameraState = document.querySelector('#camera-state');
@@ -30,9 +33,8 @@ let channel = null;
 let mediaSetup = null;
 let mediaPaused = false;
 let beginSent = false;
-const utterances = new Map();
 const prepared = new Map();
-const answers = new Map();
+const startedUtterances = new Set();
 let attempt = 0;
 let offerAbort = null;
 let sessionClosed = true;
@@ -40,6 +42,10 @@ let terminalPending = false;
 let cleanupTimeout = null;
 let timerInterval = null;
 let timerStartedAt = null;
+let csrfToken = null;
+let snapshotAbort = null;
+let snapshotAttempted = false;
+let previousOverflow = '';
 
 async function checkAccount() {
   const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
@@ -115,9 +121,10 @@ function setInterviewPhase(phase, text, hint = '') {
 }
 
 function showError(message) {
-  errorLabel.textContent = message;
-  errorLabel.hidden = false;
-  errorLabel.dataset.kind = 'error';
+  const target = workspace.open ? errorLabel : setupError;
+  target.textContent = message;
+  target.hidden = false;
+  target.dataset.kind = 'error';
   setStatus('Error');
 }
 
@@ -135,55 +142,58 @@ function clearWarning() {
   }
 }
 
-function nearTranscriptBottom() {
-  return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 72;
+function closeRoom() {
+  const wasOpen = workspace.open;
+  if (workspace.open) workspace.close();
+  workspace.hidden = true;
+  document.documentElement.style.overflow = previousOverflow;
+  if (wasOpen) beginButton.focus();
 }
 
-function scrollIfNear(nearBottom) {
-  if (nearBottom) {
-    transcript.scrollTop = transcript.scrollHeight;
-    jumpLatest.hidden = true;
-  } else {
-    jumpLatest.hidden = false;
+function openRoom() {
+  workspace.hidden = false;
+  previousOverflow = document.documentElement.style.overflow;
+  document.documentElement.style.overflow = 'hidden';
+  workspace.showModal();
+  roomTitle.focus();
+}
+
+async function captureSnapshot(sessionId, currentAttempt) {
+  if (snapshotAttempted || !beginSent || !snapshotConsent.checked || sessionClosed || mediaPaused) return;
+  snapshotAttempted = true;
+  const video = document.querySelector('#room-camera-preview');
+  if (!mediaSetup?.live(mediaSetup.camera, 'video') || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
+    return;
   }
-}
-
-transcript.addEventListener('scroll', () => {
-  jumpLatest.hidden = nearTranscriptBottom();
-});
-jumpLatest.addEventListener('click', () => {
-  transcript.scrollTop = transcript.scrollHeight;
-  jumpLatest.hidden = true;
-  transcript.focus();
-});
-
-function addTurn(speaker, text, id = null) {
-  const nearBottom = nearTranscriptBottom();
-  transcript.querySelector('.empty')?.remove();
-  const item = document.createElement('li');
-  item.className = speaker === 'candidate' ? 'candidate' : 'agent';
-  const message = document.createElement('div');
-  message.className = 'message';
-  const label = document.createElement('span');
-  label.className = 'speaker';
-  label.textContent = speaker === 'candidate' ? 'You' : 'RehearseAI';
-  const copy = document.createElement('span');
-  copy.className = 'message-copy';
-  copy.textContent = text;
-  message.append(label, copy);
-  item.append(message);
-  transcript.append(item);
-  scrollIfNear(nearBottom);
-  if (id !== null) utterances.set(id, item);
-  return item;
-}
-
-function markInterrupted(item) {
-  if (!item || item.querySelector('.annotation')) return;
-  const annotation = document.createElement('span');
-  annotation.className = 'annotation';
-  annotation.textContent = 'Interrupted';
-  item.querySelector('.message').append(annotation);
+  const scale = Math.min(1, 640 / video.videoWidth, 360 / video.videoHeight);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.78));
+  if (!blob || blob.type !== 'image/jpeg' || blob.size > 1000000 || currentAttempt !== attempt || sessionClosed || mediaPaused) {
+    snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
+    return;
+  }
+  snapshotAbort = new AbortController();
+  for (let tries = 0; tries < 3; tries += 1) {
+    if (currentAttempt !== attempt || sessionClosed || mediaPaused) return;
+    try {
+      const response = await fetch(`/api/interviews/${sessionId}/snapshot`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'image/jpeg', 'X-CSRF-Token': csrfToken },
+        body: blob, signal: snapshotAbort.signal,
+      });
+      if (response.ok) { snapshotStatus.textContent = 'Camera snapshot saved.'; return; }
+      if (response.status !== 409 || tries === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      break;
+    }
+  }
+  if (currentAttempt === attempt && !sessionClosed) snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
 }
 
 function handleEvent(message) {
@@ -210,6 +220,9 @@ function handleEvent(message) {
   if (entry.event === 'session_started') {
     document.querySelector('#session-id').textContent = `Session ${entry.session_id}`;
     startTimer();
+    captureSnapshot(entry.session_id, attempt).catch(() => {
+      if (!sessionClosed) snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
+    });
   } else if (entry.event === 'candidate_started') {
     if (errorLabel.hidden) setStatus('Listening');
   } else if (entry.event === 'candidate_turn_completed') {
@@ -220,10 +233,8 @@ function handleEvent(message) {
   } else if (entry.event === 'agent_output_started') {
     clearWarning();
     const pending = prepared.get(entry.utterance_id);
-    if (!pending) return;
-    if (!utterances.has(entry.utterance_id)) {
-      addTurn('agent', pending.text, entry.utterance_id);
-    }
+    if (!pending || startedUtterances.has(entry.utterance_id)) return;
+    startedUtterances.add(entry.utterance_id);
     if (pending.utterance_kind === 'question') {
       setInterviewPhase('Current question', pending.text, 'Take your time with your answer.');
       questionCount.textContent = `${String(pending.question_number).padStart(2, '0')} / 04`;
@@ -233,26 +244,15 @@ function handleEvent(message) {
     setStatus('Speaking');
   } else if (entry.event === 'agent_interrupted') {
     prepared.delete(entry.utterance_id);
-    markInterrupted(utterances.get(entry.utterance_id));
     if (errorLabel.hidden) setStatus('Listening');
   } else if (entry.event === 'agent_delivery_reported') {
     prepared.delete(entry.utterance_id);
     if (errorLabel.hidden) setStatus('Listening');
-  } else if (entry.event === 'candidate_final' && entry.text) {
-    const answerNumber = entry.answer_number ?? entry.sequence;
-    const previous = answers.get(answerNumber);
-    if (previous) {
-      const nearBottom = nearTranscriptBottom();
-      previous.querySelector('.message-copy').append(document.createTextNode(` ${entry.text}`));
-      scrollIfNear(nearBottom);
-    } else {
-      answers.set(answerNumber, addTurn('candidate', entry.text));
-    }
   } else if (entry.event === 'awaiting_continuation') {
     guidance.textContent = 'Take your time; keep going when you’re ready.';
     if (errorLabel.hidden) setStatus('Listening');
   } else if (entry.event === 'interview_complete') {
-    setInterviewPhase('Interview complete', 'Your feedback is in the conversation.', 'Finishing the closing audio.');
+    setInterviewPhase('Interview complete', 'That wraps up your interview.', 'Finishing the closing audio.');
     questionCount.hidden = true;
     setProgress(4, true);
     scheduleAutomaticEnd();
@@ -303,6 +303,8 @@ function finishSession({ manual = false } = {}) {
   cleanupTimeout = null;
   stopTimer();
   offerAbort?.abort();
+  snapshotAbort?.abort();
+  snapshotAbort = null;
   offerAbort = null;
   channel?.close();
   channel = null;
@@ -316,6 +318,7 @@ function finishSession({ manual = false } = {}) {
   startButton.disabled = false;
   startButton.hidden = false;
   startButton.textContent = 'Start again';
+  returnButton.hidden = false;
   endButton.disabled = true;
   resumeButton.hidden = true;
   mediaLossOverlay.hidden = true;
@@ -348,6 +351,7 @@ function mediaLost(kind) {
     return;
   }
   mediaPaused = true;
+  snapshotAbort?.abort();
   guidance.textContent = `${kind} stopped. Restore it, then choose Resume interview.`;
   mediaLossReason.textContent = `${kind} stopped. Restore it, then choose Resume interview.`;
   mediaLossOverlay.hidden = false;
@@ -393,9 +397,10 @@ async function resumeInterview() {
 
 function showSetup() {
   if (!sessionClosed) return;
+  closeRoom();
   setupPanel.hidden = false;
-  workspace.hidden = true;
   beginButton.hidden = false;
+  beginButton.focus();
   mediaLossOverlay.hidden = true;
   startButton.hidden = true;
   endButton.disabled = true;
@@ -432,7 +437,7 @@ async function waitForIce(pc) {
 }
 
 async function startSession() {
-  if (!sessionClosed || !mediaSetup?.ready()) return;
+  if (!sessionClosed || !mediaSetup?.ready() || !snapshotConsent.checked) return;
   const thisAttempt = ++attempt;
   sessionClosed = false;
   terminalPending = false;
@@ -441,24 +446,22 @@ async function startSession() {
   stopTimer();
   elapsed.textContent = '00:00';
   errorLabel.hidden = true;
+  setupError.hidden = true;
   delete errorLabel.dataset.kind;
-  const empty = document.createElement('li');
-  empty.className = 'empty';
-  empty.textContent = 'Your conversation will appear here when you begin.';
-  transcript.replaceChildren(empty);
-  utterances.clear();
+  snapshotStatus.textContent = '';
+  snapshotAttempted = false;
   prepared.clear();
-  answers.clear();
-  jumpLatest.hidden = true;
+  startedUtterances.clear();
   document.querySelector('#session-id').textContent = 'Connecting to a session';
   setInterviewPhase('Opening', 'We’ll start with a quick hello.', 'Allow microphone access when prompted.');
   questionCount.hidden = true;
   setProgress();
   startButton.disabled = true;
   startButton.hidden = true;
+  returnButton.hidden = true;
   endButton.disabled = false;
   setupPanel.hidden = true;
-  workspace.hidden = false;
+  openRoom();
   mediaSetup.showRoomPreviews();
   mediaLossOverlay.hidden = true;
   resumeButton.hidden = true;
@@ -514,10 +517,10 @@ async function startSession() {
     offerAbort = new AbortController();
     const csrfResponse = await fetch('/api/csrf', { credentials: 'same-origin' });
     if (!csrfResponse.ok) throw new Error('Could not authorize the interview connection.');
-    const csrfToken = (await csrfResponse.json()).token;
+    csrfToken = (await csrfResponse.json()).token;
     const response = await fetch('/api/offer', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-      body: JSON.stringify({ sdp: peer.localDescription.sdp, type: peer.localDescription.type }),
+      body: JSON.stringify({ sdp: peer.localDescription.sdp, type: peer.localDescription.type, snapshot_acknowledged: snapshotConsent.checked }),
       signal: offerAbort.signal,
     });
     if (thisAttempt !== attempt) return;
@@ -542,6 +545,8 @@ async function startSession() {
 }
 
 startButton.addEventListener('click', showSetup);
+returnButton.addEventListener('click', () => { closeRoom(); location.assign('/dashboard'); });
+workspace.addEventListener('cancel', (event) => event.preventDefault());
 beginButton.addEventListener('click', startSession);
 resumeButton.addEventListener('click', resumeInterview);
 endButton.addEventListener('click', endSession);
@@ -564,7 +569,7 @@ logoutButton.addEventListener('click', async () => {
 window.addEventListener('DOMContentLoaded', () => {
   mediaSetup = new window.RehearseMediaSetup({
     onChange: (ready) => {
-      beginButton.disabled = !ready || !sessionClosed;
+      beginButton.disabled = !ready || !sessionClosed || !snapshotConsent.checked;
       if (mediaPaused) resumeButton.disabled = !ready;
       updateMediaLabels();
     },
@@ -577,6 +582,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelector('#share-screen').addEventListener('click', () => mediaSetup.shareScreen());
   document.querySelector('#test-speaker').addEventListener('click', () => mediaSetup.testSpeaker());
   document.querySelector('#confirm-speaker').addEventListener('click', () => mediaSetup.confirmSpeaker());
+  snapshotConsent.addEventListener('change', () => mediaSetup.update());
   document.querySelector('#restore-devices').addEventListener('click', () => mediaSetup.enableDevices());
   document.querySelector('#restore-screen').addEventListener('click', () => mediaSetup.shareScreen());
   document.querySelector('#cancel-setup').addEventListener('click', () => mediaSetup.cleanup());

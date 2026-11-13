@@ -1,6 +1,7 @@
 """PostgreSQL persistence, permission, and private PDF regressions using synthetic events."""
 
 import asyncio
+import io
 import os
 import uuid
 from datetime import UTC, datetime
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -18,6 +20,7 @@ from rehearse_ai.config import AuthConfig, Settings
 from rehearse_ai.interview_store import InterviewStore
 from rehearse_ai.server import create_app
 from rehearse_ai.session_log import SessionLog
+from rehearse_ai.snapshot import InvalidSnapshot, save_snapshot
 from rehearse_ai.transcript_pdf import build_pdf
 
 TEST_URL = os.environ.get(
@@ -104,11 +107,14 @@ async def test_order_corrections_terminal_states_and_stale_events(tmp_path):
         assert sorted(
             await asyncio.gather(store.generate_pdf(record_id), store.generate_pdf(record_id))
         ) == [False, True]
+        async with sessions() as db:
+            assert (await db.get(InterviewRecord, record_id)).snapshot_status == "unavailable"
         pdf = PdfReader(store.pdf_path(record_id))
         text = "\n".join(page.extract_text() for page in pdf.pages)
         assert "I used web books" in text
         assert "webhooks" not in text
         assert "partial interview conversation" in text
+        assert "Camera snapshot unavailable" in text
     finally:
         await engine.dispose()
 
@@ -424,7 +430,7 @@ def test_pdf_metadata_and_conversation_labels(tmp_path, status, expected_partial
         ],
     )
     text = "\n".join(page.extract_text() for page in PdfReader(path).pages)
-    assert "Interview Transcript" in text
+    assert "Conversation PDF" in text
     assert "candidate@example.com" in text
     assert "Candidate name (self-reported)" in text and "Zoë García" in text
     assert "UTC" in text and "4m 12s" in text
@@ -444,6 +450,7 @@ def test_candidate_admin_isolation_and_regeneration(tmp_path):
         cartesia_api_key="test-ca",
         session_dir=tmp_path / "logs",
         pdf_dir=tmp_path / "pdf",
+        snapshot_dir=tmp_path / "snapshots",
         auth=AuthConfig(database_url=TEST_URL, secret="test-secret-at-least-thirty-two-characters"),
     )
     app = create_app(settings)
@@ -552,7 +559,9 @@ def test_candidate_admin_isolation_and_regeneration(tmp_path):
         all_ids = {item["id"] for item in client.get("/api/admin/interviews").json()["items"]}
         assert {str(record_a), str(record_b)} <= all_ids
         assert client.get(f"/admin/interviews/{record_a}").status_code == 200
-        assert "pdf-link" in client.get(f"/admin/interviews/{record_a}").text
+        admin_page = client.get(f"/admin/interviews/{record_a}").text
+        assert "Download conversation PDF" in admin_page
+        assert 'id="conversation"' not in admin_page
         assert client.get(f"/api/admin/interviews/{record_a}/transcript").status_code == 200
         assert client.get(f"/api/admin/interviews/{record_a}/pdf").status_code == 200
         assert client.post(f"/api/admin/interviews/{record_a}/pdf/regenerate").status_code == 403
@@ -584,13 +593,14 @@ def test_accepted_offer_uses_server_authenticated_candidate(tmp_path, monkeypatc
             self.connection = connection
             self.candidate_id = kwargs["candidate_id"]
             self.log = SimpleNamespace(session_id=kwargs["session_id"])
+            self.done = asyncio.Event()
             captured.append(kwargs)
 
         async def run(self):
-            return None
+            await self.done.wait()
 
         async def stop(self):
-            return None
+            self.done.set()
 
     async def accept(_handler, _request, callback):
         await callback(SimpleNamespace())
@@ -604,6 +614,7 @@ def test_accepted_offer_uses_server_authenticated_candidate(tmp_path, monkeypatc
         cartesia_api_key="test-ca",
         session_dir=tmp_path / "logs",
         pdf_dir=tmp_path / "pdf",
+        snapshot_dir=tmp_path / "snapshots",
         auth=AuthConfig(database_url=TEST_URL, secret="test-secret-at-least-thirty-two-characters"),
     )
     app = create_app(settings)
@@ -633,11 +644,18 @@ def test_accepted_offer_uses_server_authenticated_candidate(tmp_path, monkeypatc
         candidate_id = client.get("/api/auth/me").json()["id"]
         assert client.get("/interview").status_code == 200
         assert client.get("/api/interviews").json()["items"] == []
+        assert (
+            client.post(
+                "/api/offer", json={"sdp": "synthetic-offer", "type": "offer"}, headers=headers
+            ).status_code
+            == 400
+        )
         response = client.post(
             "/api/offer",
             json={
                 "sdp": "synthetic-offer",
                 "type": "offer",
+                "snapshot_acknowledged": True,
                 "request_data": {"candidate_id": str(uuid.uuid4())},
             },
             headers=headers,
@@ -654,3 +672,96 @@ def test_accepted_offer_uses_server_authenticated_candidate(tmp_path, monkeypatc
         saved = client.portal.call(lookup)
         assert str(saved.candidate_id) == candidate_id
         assert saved.status == "starting"
+
+        store = app.state.interview_store
+        log = SessionLog(store.logs, str(record_id))
+        client.portal.call(store.apply_event, log.record("session_started"))
+        image = Image.new("RGB", (800, 450), "#234b59")
+        output = io.BytesIO()
+        image.save(output, "JPEG", exif=b"Exif\x00\x00synthetic metadata")
+        jpeg = output.getvalue()
+        url = f"/api/interviews/{record_id}/snapshot"
+        assert (
+            client.post(url, content=jpeg, headers={"Content-Type": "image/jpeg"}).status_code
+            == 403
+        )
+        assert (
+            client.post(
+                url, content=b"not a jpeg", headers={**headers, "Content-Type": "image/jpeg"}
+            ).status_code
+            == 422
+        )
+        assert (
+            client.post(
+                url, content=b"x" * 1_000_001, headers={**headers, "Content-Type": "image/jpeg"}
+            ).status_code
+            == 413
+        )
+        assert (
+            client.post(
+                url, content=jpeg, headers={**headers, "Content-Type": "image/jpeg"}
+            ).status_code
+            == 201
+        )
+        assert (
+            client.post(
+                url, content=jpeg, headers={**headers, "Content-Type": "image/jpeg"}
+            ).status_code
+            == 409
+        )
+        with Image.open(store.snapshot_path(record_id)) as saved_image:
+            assert saved_image.size == (640, 360)
+            assert not saved_image.getexif()
+        other = address()
+        assert (
+            client.post(
+                "/api/auth/signup", json={"email": other, "password": PASSWORD}, headers=headers
+            ).status_code
+            == 201
+        )
+        assert (
+            client.post(
+                "/api/auth/login", json={"email": other, "password": PASSWORD}, headers=headers
+            ).status_code
+            == 204
+        )
+        assert (
+            client.post(
+                url, content=jpeg, headers={**headers, "Content-Type": "image/jpeg"}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                "/api/auth/login", json={"email": email, "password": PASSWORD}, headers=headers
+            ).status_code
+            == 204
+        )
+        client.portal.call(store.apply_event, log.record("interview_complete"))
+        assert (
+            client.post(
+                url, content=jpeg, headers={**headers, "Content-Type": "image/jpeg"}
+            ).status_code
+            == 409
+        )
+        client.portal.call(store.pdf_jobs.join)
+        pdf = PdfReader(store.pdf_path(record_id))
+        assert "Candidate camera snapshot" in "\n".join(page.extract_text() for page in pdf.pages)
+        assert client.portal.call(lookup).snapshot_status == "available"
+        log.close()
+
+
+def test_snapshot_validation_and_private_reencoding(tmp_path):
+    target = tmp_path / "private" / "still.jpg"
+    for invalid in (b"", b"not an image", b"x" * 1_000_001):
+        with pytest.raises(InvalidSnapshot):
+            save_snapshot(invalid, target)
+    png = io.BytesIO()
+    Image.new("RGB", (300, 200), "white").save(png, "PNG")
+    with pytest.raises(InvalidSnapshot):
+        save_snapshot(png.getvalue(), target)
+    oversized_dimensions = io.BytesIO()
+    Image.new("RGB", (2000, 1100), "white").save(oversized_dimensions, "JPEG")
+    with pytest.raises(InvalidSnapshot):
+        save_snapshot(oversized_dimensions.getvalue(), target)
+    assert not target.exists()

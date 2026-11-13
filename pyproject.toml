@@ -15,6 +15,7 @@ dependencies = [
     "fastapi-users[sqlalchemy]>=15,<16",
     "itsdangerous>=2.2,<3",
     "pipecat-ai[cartesia,deepgram,openai,runner,webrtc]==1.14.0",
+    "pillow>=12,<14",
     "reportlab>=4.4,<5",
 ]
 

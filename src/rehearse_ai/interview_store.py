@@ -30,10 +30,12 @@ class InterviewStore:
         logs: Path,
         pdf_dir: Path,
         on_failure: Callable[[str], Awaitable[None]] | None = None,
+        snapshot_dir: Path | None = None,
     ) -> None:
         self.db_sessions = db_sessions
         self.logs = logs
         self.pdf_dir = pdf_dir
+        self.snapshot_dir = snapshot_dir or pdf_dir / "snapshots"
         self.on_failure = on_failure
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1024)
         self.pdf_jobs: asyncio.Queue[uuid.UUID] = asyncio.Queue(maxsize=64)
@@ -41,6 +43,7 @@ class InterviewStore:
         self._event_task: asyncio.Task[None] | None = None
         self._pdf_task: asyncio.Task[None] | None = None
         self._reconciling = False
+        self._snapshot_events: dict[uuid.UUID, asyncio.Event] = {}
 
     async def start(self) -> None:
         self._reconciling = True
@@ -105,6 +108,7 @@ class InterviewStore:
                     prompt_version=prompt_version,
                     last_event_sequence=0,
                     pdf_status="not_ready",
+                    snapshot_status="not_started",
                 )
             )
         return record_id
@@ -162,6 +166,7 @@ class InterviewStore:
             if kind == "session_started" and record.status == "starting":
                 record.status = "in_progress"
                 record.started_at = timestamp
+                record.snapshot_status = "pending"
             elif kind == "candidate_final":
                 boundary_id = event.get("boundary_frame_id")
                 turn_number = event.get("turn_number")
@@ -332,6 +337,17 @@ class InterviewStore:
                 self.pdf_jobs.task_done()
 
     async def generate_pdf(self, record_id: uuid.UUID) -> bool:
+        async with self.db_sessions() as db:
+            snapshot_state = await db.scalar(
+                select(InterviewRecord.snapshot_status).where(InterviewRecord.id == record_id)
+            )
+        if snapshot_state == "pending":
+            try:
+                await asyncio.wait_for(
+                    self._snapshot_events.setdefault(record_id, asyncio.Event()).wait(), 1.5
+                )
+            except TimeoutError:
+                pass
         async with self.db_sessions.begin() as db:
             result = await db.execute(
                 update(InterviewRecord)
@@ -343,7 +359,17 @@ class InterviewStore:
                 .values(pdf_status="generating", pdf_error=None)
             )
             claimed = result.rowcount == 1
+            if claimed:
+                await db.execute(
+                    update(InterviewRecord)
+                    .where(
+                        InterviewRecord.id == record_id,
+                        InterviewRecord.snapshot_status == "pending",
+                    )
+                    .values(snapshot_status="unavailable")
+                )
         if not claimed:
+            self._snapshot_events.pop(record_id, None)
             return False
         try:
             async with self.db_sessions() as db:
@@ -365,7 +391,14 @@ class InterviewStore:
                     "termination_reason": record.termination_reason,
                     "candidate_id": str(record.candidate_id),
                     "candidate_email": candidate.email,
+                    "snapshot_captured_at": record.snapshot_captured_at,
                 }
+                snapshot_path = self.snapshot_path(record_id)
+                data["snapshot_path"] = (
+                    snapshot_path
+                    if record.snapshot_status == "available" and snapshot_path.is_file()
+                    else None
+                )
                 items = [
                     {
                         "speaker": entry.speaker,
@@ -389,6 +422,7 @@ class InterviewStore:
                     )
                 )
             LOGGER.exception("PDF generation error for interview %s", record_id)
+            self._snapshot_events.pop(record_id, None)
             return False
         async with self.db_sessions.begin() as db:
             await db.execute(
@@ -399,7 +433,14 @@ class InterviewStore:
                     pdf_error=None,
                 )
             )
+        self._snapshot_events.pop(record_id, None)
         return True
+
+    def snapshot_path(self, record_id: uuid.UUID) -> Path:
+        return self.snapshot_dir / f"{record_id}.jpg"
+
+    def snapshot_ready(self, record_id: uuid.UUID) -> None:
+        self._snapshot_events.setdefault(record_id, asyncio.Event()).set()
 
     def pdf_path(self, record_id: uuid.UUID) -> Path:
         return self.pdf_dir / f"{record_id}.pdf"

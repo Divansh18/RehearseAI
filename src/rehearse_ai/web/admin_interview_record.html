@@ -11,15 +11,10 @@
   <main class="dashboard-shell">
     <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div><nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/dashboard">Overview</a><a href="/interview">Interview</a><a href="/admin/interviews" aria-current="page">Admin</a></div><details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details></nav></header>
     <div class="dashboard-title"><div><span class="eyebrow">Admin record</span><h1>Interview record</h1><p id="record-date">Loading…</p><p id="record-status"></p><p id="record-candidate"></p></div><a class="secondary" href="/admin/interviews">Back to interviews</a></div>
-    <section class="account-card">
-      <h2>Transcript</h2>
-      <p class="muted">Candidate speech is machine transcription. Assistant output status reflects server events, not confirmed browser playback.</p>
-      <div id="conversation" class="conversation-list"></div>
-    </section>
     <section class="account-card pdf-card">
-      <h2>Transcript PDF</h2><p id="pdf-state">Loading…</p>
-      <a id="pdf-link" hidden>Download PDF</a>
-      <button id="pdf-regenerate" type="button" hidden>Regenerate PDF</button>
+      <h2>Conversation PDF</h2><p id="pdf-state">Preparing…</p>
+      <a id="pdf-link" class="primary button" hidden>Download conversation PDF</a>
+      <button id="pdf-regenerate" class="secondary" type="button" hidden>Regenerate conversation PDF</button>
     </section>
     <p id="message" role="alert" hidden></p>
   </main>

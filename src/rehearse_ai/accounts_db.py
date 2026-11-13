@@ -64,6 +64,8 @@ class InterviewRecord(Base):
     last_event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pdf_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_ready")
     pdf_error: Mapped[str | None] = mapped_column(String(120))
+    snapshot_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_started")
+    snapshot_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class TranscriptEntry(Base):

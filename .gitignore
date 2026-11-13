@@ -13,6 +13,7 @@ build/
 dist/
 sessions/
 private_pdfs/
+private_snapshots/
 /output/pdf/
 /output/ui/
 logs/

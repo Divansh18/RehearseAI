@@ -62,12 +62,12 @@ class Element {
 
 function fixture({ active = true, fetchResponse } = {}) {
   const ids = ['start', 'end', 'connection', 'microphone', 'status-dot', 'phase-label',
-    'question', 'question-count', 'question-progress', 'guidance', 'transcript',
-    'jump-latest', 'elapsed', 'error', 'remote-audio', 'session-id',
+    'question', 'question-count', 'question-progress', 'guidance',
+    'elapsed', 'error', 'setup-error', 'remote-audio', 'session-id',
     'admin-link', 'logout', 'ai-state', 'ai-presence', 'camera-state',
     'screen-share-state', 'media-loss-overlay', 'media-loss-reason',
     'room-camera-preview', 'room-screen-preview', 'restore-devices',
-    'restore-screen', 'conversation-panel'];
+    'restore-screen', 'room-title', 'return-overview', 'snapshot-consent', 'snapshot-status'];
   ids.push('begin-interview', 'resume', 'setup-panel', 'interview-workspace',
     'camera-preview', 'screen-preview', 'mic-level', 'setup-message',
     'enable-devices', 'share-screen', 'test-speaker', 'confirm-speaker', 'cancel-setup',
@@ -75,7 +75,6 @@ function fixture({ active = true, fetchResponse } = {}) {
   const nodes = Object.fromEntries(ids.map((id) => [id, new Element()]));
   for (let i = 0; i < 4; i += 1) nodes['question-progress'].append(new Element('span'));
   nodes['question-count'].hidden = true;
-  nodes['jump-latest'].hidden = true;
   nodes['admin-link'].hidden = true;
   nodes.error.hidden = true;
   nodes['media-loss-overlay'].hidden = true;
@@ -88,11 +87,12 @@ function fixture({ active = true, fetchResponse } = {}) {
   }
   nodes.connection.textContent = 'Ready';
   nodes.microphone.textContent = 'Microphone off';
-  const empty = new Element('li');
-  empty.className = 'empty';
-  nodes.transcript.append(empty);
   nodes['remote-audio'].pause = () => {};
+  nodes['interview-workspace'].showModal = function () { this.open = true; };
+  nodes['interview-workspace'].close = function () { this.open = false; };
+  nodes['interview-workspace'].open = active;
   const document = {
+    documentElement: { style: { overflow: '' } },
     querySelector: (selector) => nodes[selector.slice(1)],
     createElement: (tag) => new Element(tag),
     createTextNode: (text) => new TextNode(text),
@@ -131,38 +131,18 @@ function fixture({ active = true, fetchResponse } = {}) {
   };
 }
 
-test('queued speech stays out of transcript; output, interruption, and candidate continuations stay ordered', () => {
+test('prepared speech does not present a question; output and interruption update room state', () => {
   const { nodes, send } = fixture();
-  send({ event: 'agent_prepared', utterance_id: 0, utterance_kind: 'greeting', text: 'Unplayed.' });
-  send({ event: 'agent_interrupted', utterance_id: 0 });
-  assert.equal(nodes.transcript.children.length, 1);
-  send({ event: 'agent_prepared', utterance_id: 1, utterance_kind: 'greeting', text: 'Hello.' });
-  assert.equal(nodes.transcript.children.length, 1);
+  send({ event: 'agent_prepared', utterance_id: 1, utterance_kind: 'question', question_number: 1, text: 'Question one.' });
   assert.equal(nodes['question-count'].hidden, true);
   assert.equal(nodes.connection.textContent, 'Preparing');
-  assert.equal(nodes['ai-state'].textContent, 'Preparing');
   send({ event: 'agent_output_started', utterance_id: 1 });
-  assert.equal(nodes.transcript.children[0].querySelector('.speaker').textContent, 'RehearseAI');
-  assert.equal(nodes.transcript.children[0].children[0].className, 'message');
-  assert.equal(nodes.transcript.children[0].children[0].children[0].className, 'speaker');
-  assert.equal(nodes.connection.textContent, 'Speaking');
-  assert.equal(nodes['ai-presence'].dataset.state, 'speaking');
-  send({ event: 'agent_interrupted', utterance_id: 1 });
-  assert.equal(nodes.transcript.children[0].querySelector('.annotation').textContent, 'Interrupted');
-  assert.equal(nodes.connection.textContent, 'Listening');
-  assert.equal(nodes['ai-presence'].dataset.state, 'listening');
-  send({ event: 'agent_prepared', utterance_id: 2, utterance_kind: 'question', question_number: 1, text: 'Tell me about a project.' });
-  send({ event: 'agent_output_started', utterance_id: 2 });
-  assert.equal(nodes['question-count'].hidden, false);
   assert.equal(nodes['question-count'].textContent, '01 / 04');
-  assert.equal(nodes['question-progress'].children[0].dataset.state, 'active');
-  send({ event: 'agent_delivery_reported', utterance_id: 2 });
+  assert.equal(nodes.connection.textContent, 'Speaking');
+  send({ event: 'agent_interrupted', utterance_id: 1 });
   assert.equal(nodes.connection.textContent, 'Listening');
-  send({ event: 'candidate_final', answer_number: 1, text: 'I built a parser.' });
-  send({ event: 'candidate_final', answer_number: 1, text: 'It reads config files.' });
-  assert.equal(nodes.transcript.children.length, 3);
-  assert.equal(nodes.transcript.children[2].querySelector('.speaker').textContent, 'You');
-  assert.match(nodes.transcript.children[2].textContent, /I built a parser\. It reads config files\./);
+  send({ event: 'candidate_final', answer_number: 1, text: 'A project answer.' });
+  assert.equal(nodes['question-count'].textContent, '01 / 04');
 });
 
 test('database write failure stays visible and does not claim the interview was saved', () => {
@@ -175,34 +155,51 @@ test('database write failure stays visible and does not claim the interview was 
   assert.equal(nodes.error.hidden, false);
 });
 
-test('transcript does not snap back when reader has scrolled up', () => {
-  const { nodes, send } = fixture();
-  send({ event: 'candidate_final', answer_number: 1, text: 'First segment.' });
-  assert.equal(nodes.transcript.scrollTop, 0);
-  nodes.transcript.onscroll();
-  assert.equal(nodes['jump-latest'].hidden, false);
-  nodes.transcript.scrollTop = 100;
-  send({ event: 'candidate_final', answer_number: 1, text: 'Second segment.' });
-  assert.equal(nodes.transcript.scrollTop, 100);
-  assert.equal(nodes['jump-latest'].hidden, false);
-  nodes['jump-latest'].onclick();
-  assert.equal(nodes.transcript.scrollTop, 400);
-  assert.equal(nodes['jump-latest'].hidden, true);
-  assert.equal(nodes.transcript.focused, true);
+test('room is modal, locks background scrolling, and Escape cannot dismiss it', () => {
+  const { nodes, context } = fixture({ active: false });
+  context.openRoom();
+  assert.equal(nodes['interview-workspace'].open, true);
+  assert.equal(nodes['room-title'].focused, true);
+  assert.equal(context.document.documentElement.style.overflow, 'hidden');
+  let prevented = false;
+  nodes['interview-workspace'].oncancel({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  context.closeRoom();
+  assert.equal(context.document.documentElement.style.overflow, '');
+  assert.equal(nodes['begin-interview'].focused, true);
 });
 
-test('a long transcript keeps chronological turns while the reader stays scrolled back', () => {
-  const { nodes, send } = fixture();
-  for (let index = 1; index <= 100; index += 1) {
-    send({ event: 'candidate_final', answer_number: index, text: `Answer ${index}` });
-  }
-  assert.equal(nodes.transcript.children.length, 100);
-  assert.match(nodes.transcript.children[0].textContent, /Answer 1/);
-  assert.match(nodes.transcript.children[99].textContent, /Answer 100/);
-  nodes.transcript.scrollTop = 80;
-  send({ event: 'candidate_final', answer_number: 101, text: 'Answer 101' });
-  assert.equal(nodes.transcript.scrollTop, 80);
-  assert.equal(nodes['jump-latest'].hidden, false);
+test('one acknowledged started interview captures camera only and never captures setup or screen', async () => {
+  const uploads = [];
+  const draws = [];
+  const { nodes, context, send } = fixture({ fetchResponse: async (url, options) => {
+    uploads.push({ url, options });
+    return { ok: true, status: 201 };
+  } });
+  const camera = { getVideoTracks: () => [fakeTrack('video')] };
+  const screen = { getVideoTracks: () => [fakeTrack('video')] };
+  context.syntheticSetup = { camera, screen, live: () => true };
+  vm.runInContext('mediaSetup = syntheticSetup; csrfToken = "synthetic";', context);
+  nodes['snapshot-consent'].checked = true;
+  const video = nodes['room-camera-preview'];
+  video.readyState = 2;
+  video.videoWidth = 1280;
+  video.videoHeight = 720;
+  context.document.createElement = (tag) => tag === 'canvas' ? {
+    getContext: () => ({ drawImage(source) { draws.push(source); } }),
+    toBlob(callback) { callback(new Blob(['synthetic jpeg'], { type: 'image/jpeg' })); },
+  } : new Element(tag);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  await new Promise(setImmediate);
+  assert.equal(uploads.length, 0);
+  vm.runInContext('beginSent = true;', context);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  await new Promise(setImmediate);
+  assert.deepEqual(draws, [video]);
+  assert.equal(uploads.length, 1);
+  assert.match(uploads[0].url, /synthetic-session\/snapshot$/);
+  assert.equal(nodes['snapshot-status'].textContent, 'Camera snapshot saved.');
 });
 
 test('no-audio warning stays visible during preparation and clears when server output starts', () => {
@@ -236,6 +233,7 @@ test('two Begin clicks cannot create duplicate connection attempts', async () =>
     return new Promise((resolve) => { resolveAccount = resolve; });
   } });
   vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
+  context.document.querySelector('#snapshot-consent').checked = true;
   const first = context.startSession();
   const second = context.startSession();
   assert.equal(requests, 1);
@@ -249,6 +247,7 @@ test('expired account redirects before microphone access or WebRTC setup', async
     fetchResponse: async () => ({ ok: false, status: 401 }),
   });
   vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
+  nodes['snapshot-consent'].checked = true;
   await context.startSession();
   assert.equal(context.location.assigned, '/login?reason=expired');
   assert.equal(nodes.end.disabled, true);
@@ -284,7 +283,7 @@ test('End session releases tracks and connections immediately', () => {
   assert.equal(nodes.start.textContent, 'Start again');
 });
 
-test('closing feedback drains before automatic cleanup, then freezes timer and preserves transcript', () => {
+test('closing feedback drains before automatic cleanup and freezes timer', () => {
   const { nodes, context, send, timeouts, intervals, flushTimeouts } = fixture();
   const closed = [];
   const track = { readyState: 'live', stop: () => { track.readyState = 'ended'; } };
@@ -310,11 +309,9 @@ test('closing feedback drains before automatic cleanup, then freezes timer and p
   assert.equal(nodes.microphone.textContent, 'Microphone off');
   assert.equal(nodes.start.textContent, 'Start again');
   assert.equal(nodes['phase-label'].textContent, 'Interview complete');
-  assert.equal(nodes.transcript.children[0].textContent.includes('Good work.'), true);
   assert.equal(intervals.size, 0);
   send({ event: 'agent_prepared', utterance_id: 9, text: 'Late question.' });
   send({ event: 'agent_output_started', utterance_id: 9 });
-  assert.equal(nodes.transcript.children.length, 1);
 });
 
 test('manual End cancels pending automatic cleanup and Start again returns to setup', () => {
@@ -381,10 +378,14 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   let peer;
   let channel;
   const signals = [];
-  const { nodes, context } = fixture({ active: false, fetchResponse: async (url) => {
+  let offerBody;
+  const { nodes, context } = fixture({ active: false, fetchResponse: async (url, options) => {
     if (url === '/api/auth/me') return { ok: true, status: 200, json: async () => ({ role: 'candidate' }) };
     if (url === '/api/csrf') return { ok: true, json: async () => ({ token: 'synthetic' }) };
-    if (url === '/api/offer') return { ok: true, status: 200, json: async () => ({ type: 'answer', sdp: 'synthetic' }) };
+    if (url === '/api/offer') {
+      offerBody = JSON.parse(options.body);
+      return { ok: true, status: 200, json: async () => ({ type: 'answer', sdp: 'synthetic' }) };
+    }
     throw new Error(`Unexpected request: ${url}`);
   } });
   const mic = fakeTrack('audio');
@@ -406,7 +407,10 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
     async setRemoteDescription() {}
     close() {}
   };
-  const setup = new context.window.RehearseMediaSetup({ onChange() {}, onLoss() {} });
+  const setup = new context.window.RehearseMediaSetup({
+    onChange(ready) { nodes['begin-interview'].disabled = !ready || !nodes['snapshot-consent'].checked; },
+    onLoss() {},
+  });
   await setup.enableDevices();
   await setup.shareScreen();
   nodes['camera-preview'].readyState = 2;
@@ -418,6 +422,10 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   setup.update();
   context.updateMediaLabels();
   assert.equal(setup.ready(), true);
+  assert.equal(nodes['begin-interview'].disabled, true);
+  nodes['snapshot-consent'].checked = true;
+  setup.update();
+  assert.equal(nodes['begin-interview'].disabled, false);
   await context.startSession();
   channel.onopen();
   assert.equal(deviceRequests, 1);
@@ -427,6 +435,7 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   assert.equal(nodes['room-camera-preview'].srcObject, setup.camera);
   assert.equal(nodes['room-screen-preview'].srcObject, setup.screen);
   assert.deepEqual(peer.added, [mic]);
+  assert.equal(offerBody.snapshot_acknowledged, true);
   assert.equal(signals[0].action, 'begin');
   assert.equal(nodes['camera-state'].textContent, 'Camera on');
   assert.equal(nodes['screen-share-state'].textContent, 'Sharing your screen');
@@ -437,17 +446,10 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   assert.equal(nodes['room-camera-preview'].srcObject, null);
 });
 
-test('collapsing conversation retains messages and scroll position', () => {
+test('the live room does not render candidate transcript events', () => {
   const { nodes, send } = fixture();
-  nodes['conversation-panel'].open = true;
-  send({ event: 'candidate_final', answer_number: 1, text: 'First answer.' });
-  nodes.transcript.scrollTop = 80;
-  nodes['conversation-panel'].open = false;
-  send({ event: 'candidate_final', answer_number: 2, text: 'Second answer.' });
-  assert.equal(nodes.transcript.children.length, 2);
-  assert.equal(nodes.transcript.scrollTop, 80);
-  nodes['conversation-panel'].open = true;
-  assert.match(nodes.transcript.children[1].textContent, /Second answer/);
+  send({ event: 'candidate_final', answer_number: 1, text: 'Private candidate answer.' });
+  assert.equal(nodes['question'].textContent.includes('Private candidate answer.'), false);
 });
 
 test('permission denial and cancelled screen picker leave setup blocked', async () => {

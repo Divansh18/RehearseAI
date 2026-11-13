@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
@@ -27,6 +28,7 @@ from rehearse_ai.accounts_db import Candidate, InterviewRecord, TranscriptEntry
 from rehearse_ai.config import ConfigurationError, Settings
 from rehearse_ai.interview_store import TERMINAL, InterviewStore
 from rehearse_ai.pipeline import LiveSession
+from rehearse_ai.snapshot import MAX_UPLOAD_BYTES, InvalidSnapshot, save_snapshot
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 PACKAGE_DIR = WEB_DIR.parent
@@ -63,7 +65,9 @@ def create_app(settings: Settings) -> FastAPI:
                     {"type": "rehearseai", "event": {"event": "persistence_error"}}
                 )
 
-    store = InterviewStore(db_sessions, settings.session_dir, settings.pdf_dir, storage_failure)
+    store = InterviewStore(
+        db_sessions, settings.session_dir, settings.pdf_dir, storage_failure, settings.snapshot_dir
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -90,6 +94,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.build_id = build_id
     app.state.accounts = accounts
     app.state.interview_store = store
+    app.state.active_sessions = sessions
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -367,6 +372,48 @@ def create_app(settings: Settings) -> FastAPI:
         await accessible_record(db, record_id, user, admin=True)
         return await transcript_rows(db, record_id)
 
+    @app.post("/api/interviews/{record_id}/snapshot", status_code=201)
+    async def candidate_snapshot(record_id: uuid.UUID, request: Request, db: Db) -> dict[str, str]:
+        user = await accounts.require_user(request, db)
+        accounts.check_csrf(request)
+        record = await accessible_record(db, record_id, user, admin=False)
+        if record.status != "in_progress" or record.snapshot_status != "pending":
+            raise HTTPException(409, "Camera snapshot is not accepted for this interview")
+        if not any(
+            live.log.session_id == str(record_id) and live.candidate_id == str(user.id)
+            for live in sessions
+        ):
+            raise HTTPException(409, "Interview connection is no longer active")
+        if request.headers.get("content-type", "").split(";", 1)[0] != "image/jpeg":
+            raise HTTPException(415, "Expected a JPEG camera image")
+        size_header = request.headers.get("content-length", "0")
+        if not size_header.isdecimal():
+            raise HTTPException(400, "Invalid camera image length")
+        if int(size_header) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "Camera image is too large")
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > MAX_UPLOAD_BYTES:
+                raise HTTPException(413, "Camera image is too large")
+        async with db_sessions.begin() as transaction:
+            current = await transaction.get(InterviewRecord, record_id, with_for_update=True)
+            if (
+                current is None
+                or current.candidate_id != user.id
+                or current.status != "in_progress"
+                or current.snapshot_status != "pending"
+            ):
+                raise HTTPException(409, "Camera snapshot is no longer accepted")
+            try:
+                await asyncio.to_thread(save_snapshot, bytes(raw), store.snapshot_path(record_id))
+            except InvalidSnapshot as exc:
+                raise HTTPException(422, str(exc)) from exc
+            current.snapshot_status = "available"
+            current.snapshot_captured_at = datetime.now(UTC)
+        store.snapshot_ready(record_id)
+        return {"status": "saved"}
+
     async def pdf_response(record: InterviewRecord) -> Response:
         if record.status not in TERMINAL:
             raise HTTPException(409, "Available after the interview ends")
@@ -541,9 +588,15 @@ def create_app(settings: Settings) -> FastAPI:
         accounts.check_csrf(request)
         try:
             body = await request.json()
-            if not isinstance(body, dict) or body.get("type") != "offer":
+            if (
+                not isinstance(body, dict)
+                or body.get("type") != "offer"
+                or body.get("snapshot_acknowledged") is not True
+            ):
                 raise ValueError("Expected a WebRTC offer")
-            offer_request = SmallWebRTCRequest.from_dict(body)
+            offer_request = SmallWebRTCRequest.from_dict(
+                {key: value for key, value in body.items() if key != "snapshot_acknowledged"}
+            )
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail="Invalid WebRTC offer") from exc
 

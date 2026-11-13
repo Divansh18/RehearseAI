@@ -20,6 +20,9 @@ from reportlab.platypus import (
     Spacer,
     Table,
 )
+from reportlab.platypus import (
+    Image as PdfImage,
+)
 
 FONT = Path(__file__).resolve().parent / "fonts" / "NotoSans-Regular.ttf"
 INK = colors.HexColor("#181818")
@@ -116,7 +119,7 @@ def build_pdf(path: Path, record: dict[str, Any], entries: list[dict[str, Any]])
     story = [
         paragraph("REHEARSEAI", label),
         Spacer(1, 3),
-        paragraph("Interview Transcript", title),
+        paragraph("Conversation PDF", title),
         paragraph(f"Interview ID  {record['id']}", muted),
         Spacer(1, 14),
     ]
@@ -143,6 +146,29 @@ def build_pdf(path: Path, record: dict[str, Any], entries: list[dict[str, Any]])
         ]
     )
     story.extend([metadata, Spacer(1, 12)])
+    snapshot = record.get("snapshot_path")
+    if snapshot and Path(snapshot).is_file():
+        from PIL import Image as PillowImage
+
+        with PillowImage.open(snapshot) as source:
+            width, height = source.size
+        display_width = min(210, 130 * width / height)
+        display_height = display_width * height / width
+        story.extend(
+            [
+                CondPageBreak(display_height + 44),
+                paragraph("Candidate camera snapshot", label),
+                Spacer(1, 5),
+                PdfImage(str(snapshot), width=display_width, height=display_height),
+                Spacer(1, 4),
+                paragraph(
+                    f"Saved at (server time): {_time(record.get('snapshot_captured_at'))}", muted
+                ),
+                Spacer(1, 11),
+            ]
+        )
+    else:
+        story.extend([paragraph("Camera snapshot unavailable", muted), Spacer(1, 11)])
     if record["status"] in {"ended_early", "interrupted", "failed"}:
         story.append(paragraph("This is a partial interview conversation.", muted))
         story.append(Spacer(1, 5))
@@ -180,7 +206,7 @@ def build_pdf(path: Path, record: dict[str, Any], entries: list[dict[str, Any]])
             canvas.line(42, 38, A4[0] - 42, 38)
             canvas.setFont("RehearseNoto", 8)
             canvas.setFillColor(MUTED)
-            canvas.drawString(42, 25, "RehearseAI  /  Interview Transcript")
+            canvas.drawString(42, 25, "RehearseAI  /  Conversation PDF")
             canvas.drawRightString(A4[0] - 42, 25, f"Page {doc.page}")
             canvas.restoreState()
 
@@ -191,7 +217,7 @@ def build_pdf(path: Path, record: dict[str, Any], entries: list[dict[str, Any]])
             leftMargin=42,
             topMargin=43,
             bottomMargin=56,
-            title="Interview Transcript",
+            title="Conversation PDF",
         )
         document.build(story, onFirstPage=footer, onLaterPages=footer)
         os.chmod(temp, 0o600)
