@@ -291,6 +291,19 @@ class LiveSession:
         self.log = SessionLog(settings.session_dir, session_id or str(uuid.uuid4()), event_sink)
         if candidate_id is not None:
             self.log.record("candidate_authenticated", candidate_id=candidate_id)
+        self.log.record(
+            "stt_configured",
+            model=settings.stt_model,
+            language="en",
+            keyterm_count=len(settings.stt_keyterms),
+            sample_rate_hz=16000,
+            channels=1,
+            encoding="linear16",
+            interim_results=True,
+            endpointing="provider_default",
+            vad_stop_secs=settings.vad_stop_secs,
+            turn_pause_secs=settings.turn_pause_secs,
+        )
         transport = SmallWebRTCTransport(
             webrtc_connection=connection,
             params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),
@@ -329,7 +342,10 @@ class LiveSession:
                 ),
                 DeepgramSTTService(
                     api_key=settings.deepgram_api_key,
-                    settings=DeepgramSTTService.Settings(model=settings.stt_model),
+                    settings=DeepgramSTTService.Settings(
+                        model=settings.stt_model,
+                        keyterm=list(settings.stt_keyterms) if settings.stt_keyterms else None,
+                    ),
                 ),
                 UserTurnProcessor(
                     user_turn_stop_timeout=30.0,

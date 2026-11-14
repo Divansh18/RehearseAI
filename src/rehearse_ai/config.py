@@ -9,6 +9,18 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
+DEFAULT_STT_KEYTERMS = ("RehearseAI", "GrepAI", "GitHub", "webhooks")
+
+
+def parse_stt_keyterms(raw: str) -> tuple[str, ...]:
+    """Parse a short static Nova-3 vocabulary; an empty value disables hints."""
+    terms = tuple(term.strip() for term in raw.split(",") if term.strip())
+    if len(terms) > 12 or len({term.casefold() for term in terms}) != len(terms):
+        raise ConfigurationError("REHEARSE_STT_KEYTERMS needs at most 12 unique terms")
+    if any(len(term) > 48 or any(char in term for char in "\n\r:;") for term in terms):
+        raise ConfigurationError("REHEARSE_STT_KEYTERMS contains an invalid term")
+    return terms
+
 
 class ConfigurationError(ValueError):
     """A required setting is missing or invalid."""
@@ -47,6 +59,7 @@ class Settings:
     pdf_dir: Path = Path("private_pdfs")
     snapshot_dir: Path = Path("private_snapshots")
     stt_model: str = "nova-3-general"
+    stt_keyterms: tuple[str, ...] = DEFAULT_STT_KEYTERMS
     llm_model: str = "gpt-4.1-mini"
     tts_provider: str = "cartesia"
     cartesia_tts_model: str = "sonic-3.6"
@@ -207,6 +220,9 @@ class Settings:
             pdf_dir=Path(values.get("REHEARSE_PDF_DIR", "private_pdfs")),
             snapshot_dir=Path(values.get("REHEARSE_SNAPSHOT_DIR", "private_snapshots")),
             stt_model=values.get("REHEARSE_STT_MODEL", "nova-3-general"),
+            stt_keyterms=parse_stt_keyterms(
+                values.get("REHEARSE_STT_KEYTERMS", ",".join(DEFAULT_STT_KEYTERMS))
+            ),
             llm_model=values.get("REHEARSE_LLM_MODEL", "gpt-4.1-mini"),
             tts_provider=provider,
             cartesia_tts_model=cartesia_model,

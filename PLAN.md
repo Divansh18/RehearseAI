@@ -98,6 +98,12 @@ The new event stream uses one server monotonic clock in milliseconds from sessio
 - Consider browser playout acknowledgment if stronger delivery evidence is needed; current Pipecat server event is deliberately labeled approximate.
 - Decide which genuine evidence can be shared. Raw session logs and recordings are ignored by Git.
 
+## Speech recognition and delay investigation (14 November 2026)
+
+The current browser capture uses echo cancellation and noise suppression without selecting a fixed microphone or browser sample rate. SmallWebRTC resamples received audio to 16-kHz mono PCM16. Pipecat 1.14.0 Deepgram Nova-3 emits final segments that `InterviewInput` accumulates; one `UserTurnProcessor` decides completion after VAD and the 1.1-second silence wait. Session `d51515ab-5d4a-45cc-8376-cf1c66237fc9` shows 807.4/992.0 ms from last STT final to turn completion, and the one measured structured decision took 2,273.0 ms. This identifies two observed waiting stages, not their general distribution or the browser's playback delay. No final segments appeared duplicated in that two-turn log; audio is unavailable to detect omissions.
+
+Nova-3 supports keyterm prompting. The installed adapter passes repeated `keyterm` values at connection setup, while its settings update reconnects rather than using the provider's mid-stream Configure message. A bounded static list now hints RehearseAI, GrepAI, GitHub, and webhooks; it can be disabled for comparison. Candidate-specific names remain in session memory after explicit spelling/correction and are not forced into the active recognizer. The [same-audio harness](STT_EVALUATION.md) awaits consented human recordings, including genuine Graph AI negatives. Acoustic improvement and perceived delay remain unverified until microphone/audio replay testing; no turn or endpointing settings were changed.
+
 ## API and provider references
 
 - [Pipecat 1.14 SmallWebRTC transport](https://docs.pipecat.ai/api-reference/server/services/transport/small-webrtc) and [transport guidance](https://docs.pipecat.ai/client/concepts/choosing-a-transport).

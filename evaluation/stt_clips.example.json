@@ -1,0 +1,53 @@
+{
+  "clips": [
+    {
+      "id": "name-nyla",
+      "file": "clips/name-nyla.wav",
+      "reference": "My name is Nyla and I built a small GitHub app.",
+      "expected_terms": ["Nyla", "GitHub"]
+    },
+    {
+      "id": "name-siobhan",
+      "file": "clips/name-siobhan.wav",
+      "reference": "I am Siobhan. My project reviews pull requests.",
+      "expected_terms": ["Siobhan"]
+    },
+    {
+      "id": "grepai",
+      "file": "clips/grepai.wav",
+      "reference": "GrepAI posts a risk report to GitHub using webhooks.",
+      "expected_terms": ["GrepAI", "GitHub", "webhooks"],
+      "negative_terms": ["Graph AI"]
+    },
+    {
+      "id": "graph-ai-negative",
+      "file": "clips/graph-ai-negative.wav",
+      "reference": "Graph AI is the name of a different project.",
+      "expected_terms": ["Graph AI"],
+      "negative_terms": ["GrepAI"]
+    },
+    {
+      "id": "ordinary",
+      "file": "clips/ordinary.wav",
+      "reference": "I tested the change with a teammate and wrote down what happened."
+    },
+    {
+      "id": "thinking-pause",
+      "file": "clips/thinking-pause.wav",
+      "reference": "The hardest part was, let me think, handling the webhook retry safely.",
+      "expected_terms": ["webhook"]
+    },
+    {
+      "id": "name-correction",
+      "file": "clips/name-correction.wav",
+      "reference": "It's Divansh, not Devanj. D I V A N S H.",
+      "expected_terms": ["Divansh", "Devanj"]
+    },
+    {
+      "id": "term-correction",
+      "file": "clips/term-correction.wav",
+      "reference": "I said GrepAI, not Graph AI. It uses webhooks.",
+      "expected_terms": ["GrepAI", "Graph AI", "webhooks"]
+    }
+  ]
+}

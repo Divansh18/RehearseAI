@@ -73,6 +73,19 @@ def test_only_selected_tts_provider_needs_its_credential(tmp_path):
     assert settings.tts_provider == "openai"
 
 
+def test_static_nova3_keyterms_can_be_disabled_without_changing_turn_settings(tmp_path):
+    env = {
+        **AUTH_ENV,
+        "DEEPGRAM_API_KEY": "test-dg",
+        "OPENAI_API_KEY": "test-oa",
+        "CARTESIA_API_KEY": "test-ca",
+        "REHEARSE_STT_KEYTERMS": "",
+    }
+    settings = Settings.load(env, tmp_path / "none")
+    assert settings.stt_keyterms == ()
+    assert settings.turn_pause_secs == 1.1
+
+
 def test_account_configuration_requires_database_secret_and_production_transport(tmp_path):
     voice = {"DEEPGRAM_API_KEY": "dg", "OPENAI_API_KEY": "oa", "CARTESIA_API_KEY": "ca"}
     with pytest.raises(ConfigurationError, match="DATABASE_URL"):
@@ -131,6 +144,8 @@ async def test_locked_pipecat_pipeline_assembles_without_provider_calls(tmp_path
     assert names.index("InterviewInput") < names.index("ObservedCartesiaTTSService")
     assert names.index("ObservedCartesiaTTSService") < names.index("DeliveryObserver")
     tts = next(p for p in live.pipeline.processors if isinstance(p, CartesiaTTSService))
+    stt = next(p for p in live.pipeline.processors if type(p).__name__ == "DeepgramSTTService")
+    assert stt._settings.keyterm == ["RehearseAI", "GrepAI", "GitHub", "webhooks"]
     assert tts._settings.model == "sonic-3.6"
     assert tts._settings.voice == "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"
     assert tts._stop_frame_timeout_s == 3.0

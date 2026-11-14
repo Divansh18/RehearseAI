@@ -1,6 +1,7 @@
 """Candidate facts and corrections through the session routing entry point."""
 
 import asyncio
+import json
 
 import pytest
 
@@ -106,6 +107,32 @@ async def test_spoken_technical_correction_does_not_spend_probe_or_advance(tmp_p
     )
     assert session.controller.remaining_follow_ups == 0
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_project_name_correction_keeps_raw_stt_and_question(tmp_path):
+    async def infer(_kind, _payload):
+        raise AssertionError("A name correction alone must not invoke interview inference")
+
+    log = SessionLog(tmp_path, "grepai-correction")
+    session = InterviewSession(log, infer, lambda _: settle(), lambda _: None)
+    await question_one(session)
+    session.controller.memory.supply(
+        "project_name", "Graph AI", source_turn=1, supplied_wording="Graph AI"
+    )
+    await session.user_started()
+    await session.user_stopped("I said GrepAI, not Graph AI.")
+    assert session.controller.memory.get("project_name").value == "GrepAI"
+    assert session.controller.memory.get("project_name").confirmed
+    assert session.controller.answers[0] == ()
+    assert session.controller.remaining_follow_ups == 1
+    assert session.controller.memory.corrections[-1].superseded_wording == "Graph AI"
+    await session.close()
+    rows = [json.loads(line) for line in log.path.read_text().splitlines()]
+    assert any(
+        row["event"] == "candidate_final" and row["text"] == "I said GrepAI, not Graph AI."
+        for row in rows
+    )
 
 
 @pytest.mark.asyncio
