@@ -33,28 +33,20 @@
       </section>
 
       <dialog id="interview-workspace" class="room-workspace" aria-labelledby="room-title" hidden>
-        <div class="room-topline"><h1 id="room-title" tabindex="-1">Interview room</h1><div class="session-status" aria-label="Session status"><span id="status-dot" class="status-dot" aria-hidden="true"></span><span id="connection" role="status" aria-live="polite">Ready</span><span class="status-separator" aria-hidden="true">·</span><span id="microphone">Microphone off</span><span class="status-separator" aria-hidden="true">·</span><time id="elapsed" aria-label="Session elapsed time">00:00</time></div></div>
+        <div class="room-topline"><h1 id="room-title" tabindex="-1">Interview room</h1><details class="diagnostics"><summary>Diagnostics</summary><div class="diagnostics-popover"><p id="session-id">No session yet</p><p id="build-id">Build __BUILD_ID__</p><p>Agent text appears when server output starts. Browser playback is not confirmed. Automatic cleanup follows the server output-stop event plus a short drain allowance.</p></div></details><div class="session-status" aria-label="Session status"><span id="status-dot" class="status-dot" aria-hidden="true"></span><span id="connection" role="status" aria-live="polite">Ready</span><span class="status-separator" aria-hidden="true">·</span><span id="microphone">Microphone off</span><span class="status-separator" aria-hidden="true">·</span><time id="elapsed" aria-label="Session elapsed time">00:00</time></div></div>
         <div class="room-stage">
           <section class="card candidate-stage" aria-labelledby="candidate-heading">
-            <div class="stage-heading"><div><span class="eyebrow">Your view</span><h2 id="candidate-heading">You</h2></div><span id="camera-state" class="stage-state">Camera off</span></div>
-            <div class="self-view"><video id="room-camera-preview" autoplay muted playsinline aria-label="Mirrored local camera preview"></video><div id="media-loss-overlay" class="media-loss-overlay" hidden><h3>Interview paused</h3><p id="media-loss-reason">Restore your media to continue.</p><div class="restore-actions"><button id="restore-devices" class="secondary" type="button">Restore camera or microphone</button><button id="restore-screen" class="secondary" type="button">Share screen again</button><button id="resume" class="primary" type="button" disabled>Resume interview</button></div></div></div>
-            <div class="screen-strip"><div><span class="eyebrow">Screen</span><p id="screen-share-state" role="status">Not sharing</p></div><video id="room-screen-preview" autoplay muted playsinline aria-label="Local shared screen preview"></video></div>
+            <div class="self-view"><video id="room-camera-preview" autoplay muted playsinline aria-label="Mirrored local camera preview"></video><h2 id="candidate-heading" class="self-label">You</h2><span id="camera-state" class="camera-state">Camera off</span><div id="media-loss-overlay" class="media-loss-overlay" hidden><h3>Interview paused</h3><p id="media-loss-reason">Restore your media to continue.</p><div class="restore-actions"><button id="restore-devices" class="secondary" type="button">Restore camera or microphone</button><button id="restore-screen" class="secondary" type="button">Share screen again</button><button id="resume" class="primary" type="button" disabled>Resume interview</button></div></div></div>
+            <div class="screen-strip"><p id="screen-share-state" role="status">Not sharing</p><video id="room-screen-preview" autoplay muted playsinline aria-label="Local shared screen preview"></video></div>
           </section>
 
           <section class="card ai-stage" aria-labelledby="interview-heading">
-            <div class="stage-heading"><div><span class="eyebrow">Interviewer</span><h2 id="interview-heading">RehearseAI</h2></div><span id="ai-state" class="stage-state" role="status">Ready</span></div>
-            <div id="ai-presence" class="ai-presence" data-state="ready" aria-hidden="true"><span class="ai-emblem">R</span><span class="speaking-bars"><i></i><i></i><i></i><i></i><i></i></span></div>
+            <div id="ai-presence" class="ai-presence" data-state="ready"><span class="ai-emblem" aria-hidden="true">R</span><h2 id="interview-heading">RehearseAI</h2><span id="ai-state" class="ai-status" role="status">Ready</span><span class="speaking-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
             <div class="question-panel"><div class="question-heading"><p id="phase-label" class="phase-label">Before you begin</p><span id="question-count" class="progress" hidden>01 / 04</span></div><p id="question" class="question" aria-live="polite">Four questions about your project, followed by short feedback.</p><p id="guidance" class="guidance">Take a moment to find a project you’d like to talk about.</p><div id="question-progress" class="progress-track" role="img" aria-label="Interview has not started"><span></span><span></span><span></span><span></span></div></div>
           </section>
         </div>
-        <div class="room-toolbar"><p class="disclosure">AI-generated voice · One camera still is saved for the admin PDF; screen sharing stays local. <span id="snapshot-status" role="status"></span></p><div class="controls"><button id="start" class="primary" type="button" hidden>Start again</button><button id="return-overview" class="secondary" type="button" hidden>Return to overview</button><button id="end" class="danger" type="button" disabled>End interview</button></div></div>
         <p id="error" class="error" role="alert" hidden></p>
-        <details class="diagnostics">
-        <summary>Diagnostics</summary>
-        <p id="session-id">No session yet</p>
-        <p id="build-id">Build __BUILD_ID__</p>
-        <p>Agent text appears when server output starts. Browser playback is not confirmed. Automatic cleanup follows the server output-stop event plus a short drain allowance.</p>
-        </details>
+        <div class="room-toolbar"><p class="disclosure">AI-generated voice · One camera still is saved for the admin PDF; screen sharing stays local. <span id="snapshot-status" role="status"></span></p><div class="controls"><button id="start" class="primary" type="button" hidden>Start again</button><button id="return-overview" class="secondary" type="button" hidden>Return to overview</button><button id="end" class="danger" type="button" disabled>End interview</button></div></div>
       </dialog>
       <p id="setup-error" class="error" role="alert" hidden></p>
       <audio id="remote-audio" autoplay></audio>

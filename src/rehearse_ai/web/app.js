@@ -323,7 +323,6 @@ function finishSession({ manual = false } = {}) {
   resumeButton.hidden = true;
   mediaLossOverlay.hidden = true;
   beginButton.hidden = false;
-  setupPanel.hidden = true;
   workspace.hidden = false;
   if (manual) {
     setInterviewPhase('Ended', 'Session ended.');
@@ -453,14 +452,13 @@ async function startSession() {
   prepared.clear();
   startedUtterances.clear();
   document.querySelector('#session-id').textContent = 'Connecting to a session';
-  setInterviewPhase('Opening', 'We’ll start with a quick hello.', 'Allow microphone access when prompted.');
+  setInterviewPhase('Opening', 'We’ll start with a quick hello.');
   questionCount.hidden = true;
   setProgress();
   startButton.disabled = true;
   startButton.hidden = true;
   returnButton.hidden = true;
   endButton.disabled = false;
-  setupPanel.hidden = true;
   openRoom();
   mediaSetup.showRoomPreviews();
   mediaLossOverlay.hidden = true;

@@ -430,8 +430,9 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   channel.onopen();
   assert.equal(deviceRequests, 1);
   assert.equal(screenRequests, 1);
-  assert.equal(nodes['setup-panel'].hidden, true);
+  assert.equal(nodes['setup-panel'].hidden, false);
   assert.equal(nodes['interview-workspace'].hidden, false);
+  assert.equal(nodes.guidance.textContent, '');
   assert.equal(nodes['room-camera-preview'].srcObject, setup.camera);
   assert.equal(nodes['room-screen-preview'].srcObject, setup.screen);
   assert.deepEqual(peer.added, [mic]);
@@ -440,6 +441,7 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   assert.equal(nodes['camera-state'].textContent, 'Camera on');
   assert.equal(nodes['screen-share-state'].textContent, 'Sharing your screen');
   context.endSession();
+  assert.equal(nodes['setup-panel'].hidden, false);
   assert.equal(mic.readyState, 'ended');
   assert.equal(camera.readyState, 'ended');
   assert.equal(screen.readyState, 'ended');
