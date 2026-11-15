@@ -11,7 +11,6 @@ const elapsed = document.querySelector('#elapsed');
 const progressTrack = document.querySelector('#question-progress');
 const errorLabel = document.querySelector('#error');
 const audio = document.querySelector('#remote-audio');
-const logoutButton = document.querySelector('#logout');
 const beginButton = document.querySelector('#begin-interview');
 const resumeButton = document.querySelector('#resume');
 const setupPanel = document.querySelector('#setup-panel');
@@ -46,17 +45,28 @@ let csrfToken = null;
 let snapshotAbort = null;
 let snapshotAttempted = false;
 let previousOverflow = '';
+let questionTotal = 1;
+let invitationReady = false;
 
 async function checkAccount() {
-  const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
+  const response = await fetch('/api/candidate/interview', { credentials: 'same-origin' });
   if (response.status === 401) {
     endSession();
-    location.assign('/login?reason=expired');
+    location.assign('/candidate/welcome');
     return false;
   }
-  if (!response.ok) throw new Error('Could not check your sign-in. Refresh the page and try again.');
-  const account = await response.json();
-  document.querySelector('#admin-link').hidden = account.role !== 'admin';
+  if (!response.ok) throw new Error('Could not check your invitation. Reopen the private link.');
+  const assignment = await response.json();
+  if (!assignment.self_reported_name) { location.assign('/candidate/welcome'); return false; }
+  questionTotal = assignment.question_count;
+  invitationReady = assignment.can_begin;
+  progressTrack.replaceChildren(...Array.from({ length: questionTotal }, () => document.createElement('span')));
+  if (assignment.window_state === 'too_early') {
+    document.querySelector('#setup-message').textContent = 'The joining window has not opened yet. You can check devices now, then refresh when it opens.';
+  } else if (assignment.window_state === 'closed' || assignment.status !== 'assigned') {
+    document.querySelector('#setup-message').textContent = 'This interview can no longer be started. Contact the interviewer.';
+  }
+  mediaSetup?.update();
   return true;
 }
 
@@ -87,8 +97,8 @@ function setProgress(questionNumber = 0, complete = false) {
     if (state) segment.dataset.state = state;
     else delete segment.dataset.state;
   });
-  progressTrack.setAttribute('aria-label', complete ? 'All four questions complete'
-    : questionNumber ? `Question ${questionNumber} of 4` : 'Interview has not started');
+  progressTrack.setAttribute('aria-label', complete ? 'All questions complete'
+    : questionNumber ? `Question ${questionNumber} of ${questionTotal}` : 'Interview has not started');
 }
 
 function microphoneState() {
@@ -237,7 +247,7 @@ function handleEvent(message) {
     startedUtterances.add(entry.utterance_id);
     if (pending.utterance_kind === 'question') {
       setInterviewPhase('Current question', pending.text, 'Take your time with your answer.');
-      questionCount.textContent = `${String(pending.question_number).padStart(2, '0')} / 04`;
+      questionCount.textContent = `${String(pending.question_number).padStart(2, '0')} / ${String(questionTotal).padStart(2, '0')}`;
       questionCount.hidden = false;
       setProgress(pending.question_number);
     }
@@ -254,7 +264,7 @@ function handleEvent(message) {
   } else if (entry.event === 'interview_complete') {
     setInterviewPhase('Interview complete', 'That wraps up your interview.', 'Finishing the closing audio.');
     questionCount.hidden = true;
-    setProgress(4, true);
+    setProgress(questionTotal, true);
     scheduleAutomaticEnd();
   } else if (entry.event === 'interview_ended_early') {
     setInterviewPhase('Ended early', 'Interview ended early.', 'Finishing the closing audio.');
@@ -315,9 +325,8 @@ function finishSession({ manual = false } = {}) {
   microphone = null;
   audio.pause();
   audio.srcObject = null;
-  startButton.disabled = false;
-  startButton.hidden = false;
-  startButton.textContent = 'Start again';
+  startButton.disabled = true;
+  startButton.hidden = true;
   returnButton.hidden = false;
   endButton.disabled = true;
   resumeButton.hidden = true;
@@ -328,7 +337,7 @@ function finishSession({ manual = false } = {}) {
     setInterviewPhase('Ended', 'Session ended.');
     questionCount.hidden = true;
   } else {
-    guidance.textContent = 'Your microphone is off. You can start again.';
+    guidance.textContent = 'Your microphone is off. This interview attempt is closed.';
   }
   setStatus('Ended');
 }
@@ -436,7 +445,7 @@ async function waitForIce(pc) {
 }
 
 async function startSession() {
-  if (!sessionClosed || !mediaSetup?.ready() || !snapshotConsent.checked) return;
+  if (!sessionClosed || !mediaSetup?.ready() || !snapshotConsent.checked || !invitationReady) return;
   const thisAttempt = ++attempt;
   sessionClosed = false;
   terminalPending = false;
@@ -452,7 +461,7 @@ async function startSession() {
   prepared.clear();
   startedUtterances.clear();
   document.querySelector('#session-id').textContent = 'Connecting to a session';
-  setInterviewPhase('Opening', 'We’ll start with a quick hello.');
+  setInterviewPhase('Opening', 'Your assigned interview will begin shortly.');
   questionCount.hidden = true;
   setProgress();
   startButton.disabled = true;
@@ -524,7 +533,7 @@ async function startSession() {
     if (thisAttempt !== attempt) return;
     if (response.status === 401) {
       endSession();
-      location.assign('/login?reason=expired');
+      location.assign('/candidate/welcome');
       return;
     }
     if (response.status === 403) throw new Error('Secure interview setup was rejected. Refresh the page and try again.');
@@ -543,31 +552,15 @@ async function startSession() {
 }
 
 startButton.addEventListener('click', showSetup);
-returnButton.addEventListener('click', () => { closeRoom(); location.assign('/dashboard'); });
+returnButton.addEventListener('click', () => { closeRoom(); location.assign('/candidate/welcome'); });
 workspace.addEventListener('cancel', (event) => event.preventDefault());
 beginButton.addEventListener('click', startSession);
 resumeButton.addEventListener('click', resumeInterview);
 endButton.addEventListener('click', endSession);
-logoutButton.addEventListener('click', async () => {
-  endSession();
-  mediaSetup?.cleanup();
-  try {
-    const csrfResponse = await fetch('/api/csrf', { credentials: 'same-origin' });
-    if (!csrfResponse.ok) throw new Error('Could not sign out securely. Refresh and try again.');
-    const token = (await csrfResponse.json()).token;
-    const response = await fetch('/api/auth/logout', {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-      body: '{}',
-    });
-    if (!response.ok) throw new Error('Could not sign out. Refresh and try again.');
-    location.assign('/login');
-  } catch (error) { showError(error.message); }
-});
 window.addEventListener('DOMContentLoaded', () => {
   mediaSetup = new window.RehearseMediaSetup({
     onChange: (ready) => {
-      beginButton.disabled = !ready || !sessionClosed || !snapshotConsent.checked;
+      beginButton.disabled = !ready || !sessionClosed || !snapshotConsent.checked || !invitationReady;
       if (mediaPaused) resumeButton.disabled = !ready;
       updateMediaLabels();
     },

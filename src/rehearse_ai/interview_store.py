@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.accounts_db import Candidate, InterviewRecord, TranscriptEntry
+from rehearse_ai.accounts_db import Candidate, InterviewAssignment, InterviewRecord, TranscriptEntry
 from rehearse_ai.transcript_pdf import build_pdf
 
 LOGGER = logging.getLogger(__name__)
@@ -94,7 +94,12 @@ class InterviewStore:
                     pass
 
     async def create_attempt(
-        self, candidate_id: uuid.UUID, build_id: str, prompt_version: str
+        self,
+        candidate_id: uuid.UUID | None,
+        build_id: str,
+        prompt_version: str,
+        *,
+        assignment_id: uuid.UUID | None = None,
     ) -> uuid.UUID:
         record_id = uuid.uuid4()
         async with self.db_sessions.begin() as db:
@@ -102,7 +107,40 @@ class InterviewStore:
                 InterviewRecord(
                     id=record_id,
                     candidate_id=candidate_id,
+                    assignment_id=assignment_id,
                     created_at=datetime.now(UTC),
+                    status="starting",
+                    build_id=build_id,
+                    prompt_version=prompt_version,
+                    last_event_sequence=0,
+                    pdf_status="not_ready",
+                    snapshot_status="not_started",
+                )
+            )
+        return record_id
+
+    async def create_assignment_attempt(
+        self, assignment_id: uuid.UUID, build_id: str, prompt_version: str
+    ) -> uuid.UUID:
+        """Reserve the only attempt under an assignment row lock."""
+        record_id = uuid.uuid4()
+        async with self.db_sessions.begin() as db:
+            assignment = await db.get(InterviewAssignment, assignment_id, with_for_update=True)
+            instant = datetime.now(UTC)
+            if assignment is None or assignment.status != "assigned":
+                raise ValueError("Interview is unavailable or already started")
+            if not assignment.scheduled_start_at <= instant <= assignment.latest_start_at:
+                raise ValueError("Interview cannot begin outside its joining window")
+            if not assignment.self_reported_name:
+                raise ValueError("Confirm your full name before beginning")
+            assignment.status = "starting"
+            assignment.updated_at = instant
+            db.add(
+                InterviewRecord(
+                    id=record_id,
+                    candidate_id=None,
+                    assignment_id=assignment_id,
+                    created_at=instant,
                     status="starting",
                     build_id=build_id,
                     prompt_version=prompt_version,
@@ -167,6 +205,10 @@ class InterviewStore:
                 record.status = "in_progress"
                 record.started_at = timestamp
                 record.snapshot_status = "pending"
+                if record.assignment_id:
+                    assignment = await db.get(InterviewAssignment, record.assignment_id)
+                    assignment.status = "in_progress"
+                    assignment.updated_at = timestamp
             elif kind == "candidate_final":
                 boundary_id = event.get("boundary_frame_id")
                 turn_number = event.get("turn_number")
@@ -283,6 +325,10 @@ class InterviewStore:
                 pdf_needed = True
             if pdf_needed:
                 record.pdf_status = "pending"
+                if record.assignment_id:
+                    assignment = await db.get(InterviewAssignment, record.assignment_id)
+                    assignment.status = record.status
+                    assignment.updated_at = timestamp
             record.last_event_sequence = seq
         if pdf_needed and not self._reconciling:
             self.schedule_pdf(record_id)
@@ -316,6 +362,10 @@ class InterviewStore:
                     record.termination_reason = "server_restart"
                     record.ended_at = datetime.now(UTC)
                     record.pdf_status = "pending"
+                    if record.assignment_id:
+                        assignment = await db.get(InterviewAssignment, record.assignment_id)
+                        assignment.status = "interrupted"
+                        assignment.updated_at = record.ended_at
         # Pending PDFs are queued by start() after replay, including any new terminal record.
 
     def schedule_pdf(self, record_id: uuid.UUID) -> bool:
@@ -374,7 +424,14 @@ class InterviewStore:
         try:
             async with self.db_sessions() as db:
                 record = await db.get(InterviewRecord, record_id)
-                candidate = await db.get(Candidate, record.candidate_id)
+                if record.assignment_id:
+                    assignment = await db.get(InterviewAssignment, record.assignment_id)
+                    candidate_email = assignment.candidate_email
+                    candidate_name = assignment.self_reported_name
+                else:
+                    candidate = await db.get(Candidate, record.candidate_id)
+                    candidate_email = candidate.email
+                    candidate_name = None
                 entries = (
                     await db.scalars(
                         select(TranscriptEntry)
@@ -389,8 +446,9 @@ class InterviewStore:
                     "ended_at": record.ended_at,
                     "status": record.status,
                     "termination_reason": record.termination_reason,
-                    "candidate_id": str(record.candidate_id),
-                    "candidate_email": candidate.email,
+                    "candidate_id": str(record.candidate_id) if record.candidate_id else None,
+                    "candidate_email": candidate_email,
+                    "candidate_name": candidate_name,
                     "snapshot_captured_at": record.snapshot_captured_at,
                 }
                 snapshot_path = self.snapshot_path(record_id)

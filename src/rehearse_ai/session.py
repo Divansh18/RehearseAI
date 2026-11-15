@@ -33,6 +33,11 @@ _REPEAT = re.compile(
     re.IGNORECASE,
 )
 _SKIP = re.compile(r"^(?:please\s+)?(?:skip(?: this question)?|next question)\??[.!]?$", re.I)
+_FEEDBACK_REQUEST = re.compile(
+    r"\b(?:can|could|may|would|please|give|share|want|like|tell)\b.{0,80}\bfeedback\b"
+    r"|\bfeedback\b.{0,40}\?",
+    re.I,
+)
 _CORRECTION = re.compile(
     r"^\s*(?:(?:actually|sorry)\s*[, ]\s*)?"
     r"(?P<cue>it's|it is|i said|i meant|i used|my name is)\s+"
@@ -384,8 +389,22 @@ class InterviewSession:
         turn_pause_secs: float = 1.1,
         cancel_audio: CancelAudio | None = None,
         build_id: str | None = None,
+        interview_plan: dict[str, Any] | None = None,
+        self_reported_name: str | None = None,
     ) -> None:
-        self.controller = InterviewController()
+        self._assigned_plan = interview_plan
+        plan_questions = interview_plan["questions"] if interview_plan else None
+        self.controller = InterviewController(
+            tuple(item["question"] for item in plan_questions) if plan_questions else None,
+            probe_limits=tuple(item["max_probes"] for item in plan_questions)
+            if plan_questions
+            else None,
+            required=tuple(item["required"] for item in plan_questions) if plan_questions else None,
+        )
+        if self_reported_name:
+            self.controller.remember_name(
+                self_reported_name, supplied_wording=self_reported_name, confirmed=True
+            )
         self.log = log
         self._infer = infer
         self._speak = speak
@@ -580,10 +599,20 @@ class InterviewSession:
         if self.controller.stage is Stage.AWAITING_READINESS:
             await self._queue_speech(self.controller.acknowledge_spelled_name(name))
             return ""
-        await self._queue_speech(
-            self.controller.acknowledge_correction(f"Thanks, I'll call you {name}.")
-        )
+        await self._queue_speech(self._acknowledge_correction(f"Thanks, I'll call you {name}."))
         return ""
+
+    def _acknowledge_correction(self, text: str) -> Utterance:
+        interrupted = self.controller.interrupted_utterance
+        acknowledgement = self.controller.acknowledge_correction(
+            text,
+            discard_interrupted=self._assigned_plan is not None,
+            refund_probe=(
+                interrupted is not None and self._interrupted_output_id != interrupted.id
+            ),
+        )
+        self._interrupted_output_id = None
+        return acknowledgement
 
     def _correction_field(self, request: _CorrectionRequest) -> FactField | None:
         old = request.superseded
@@ -629,7 +658,7 @@ class InterviewSession:
                     "correction_target_unresolved", speaker=None, source_turn=self._turn_number
                 )
                 await self._queue_speech(
-                    self.controller.acknowledge_correction(
+                    self._acknowledge_correction(
                         "I couldn't place that correction. You can tell me the detail again."
                     )
                 )
@@ -641,7 +670,7 @@ class InterviewSession:
             self._pending_correction = request
             self._record("correction_needs_target", speaker=None, source_turn=self._turn_number)
             await self._queue_speech(
-                self.controller.acknowledge_correction(
+                self._acknowledge_correction(
                     "Which detail should I correct—your name or a project term?"
                 )
             )
@@ -740,7 +769,7 @@ class InterviewSession:
             if field_name == "candidate_name"
             else "Thanks, I've corrected that."
         )
-        await self._queue_speech(self.controller.acknowledge_correction(acknowledgement))
+        await self._queue_speech(self._acknowledge_correction(acknowledgement))
         return ""
 
     def turn_signal(self, signal: str, **details: Any) -> None:
@@ -960,6 +989,10 @@ class InterviewSession:
             if corrected is not None:
                 answer = corrected
         self._latest_candidate_turn = answer
+
+        if self._assigned_plan is not None:
+            await self._route_assigned_turn(answer)
+            return
 
         if self.controller.stage is Stage.AWAITING_CONTINUE_CHOICE:
             self._choice_turn = answer
@@ -1262,6 +1295,260 @@ class InterviewSession:
             return True
         return False
 
+    async def _route_assigned_turn(self, answer: str) -> None:
+        """Route one completed turn against the assigned, delivery-aware plan."""
+        if self._stop_latched:
+            if self.controller.stage is Stage.EARLY_CLOSING:
+                await self._queue_speech(
+                    self.controller.prepare_early_feedback(
+                        "Thank you for your time. We'll end the interview here."
+                    )
+                )
+            return
+        interrupted = self.controller.interrupted_utterance
+        if _FEEDBACK_REQUEST.search(answer):
+            unheard = interrupted is not None and self._interrupted_output_id != interrupted.id
+            await self._queue_speech(
+                self.controller.prepare_information(
+                    "I can't provide interview feedback. "
+                    "The hiring team will share any updates directly.",
+                    repeat_unheard=unheard,
+                )
+            )
+            self._record("feedback_request_declined", speaker="candidate")
+            return
+        if _is_sentence_request(_REPEAT, answer):
+            if interrupted:
+                await self._queue_speech(self.controller.retry_interrupted())
+            elif self.controller.stage in {Stage.AWAITING_ANSWER, Stage.AWAITING_PROPOSAL}:
+                try:
+                    await self._queue_speech(
+                        self.controller.request_repeat(self._last_project_prompt)
+                    )
+                except LimitReached:
+                    self._record("clarification_limit", speaker=None)
+            return
+        if _is_sentence_request(_SKIP, answer):
+            try:
+                next_prompt = (
+                    self.controller.skip_interrupted()
+                    if interrupted
+                    else self.controller.skip_current()
+                )
+            except InvalidTransition:
+                self._record("required_question_skipped", speaker="candidate")
+                await self._queue_speech(
+                    self.controller.prepare_information(
+                        "This question is part of the interview. "
+                        "If you prefer not to answer, you can say so."
+                    )
+                )
+                return
+            self._record("candidate_skipped_question", speaker="candidate")
+            if next_prompt:
+                await self._queue_speech(next_prompt)
+            else:
+                self._start_response()
+            return
+        if interrupted:
+            if not answer:
+                await self._queue_speech(self.controller.retry_interrupted())
+                return
+            if self._interrupted_output_id != interrupted.id:
+                if interrupted.kind is UtteranceKind.QUESTION:
+                    await self._queue_speech(self.controller.resolve_unheard_question(answer))
+                elif interrupted.kind in {
+                    UtteranceKind.FOLLOW_UP,
+                    UtteranceKind.NUDGE,
+                    UtteranceKind.CLARIFICATION,
+                    UtteranceKind.REPEAT,
+                }:
+                    await self._queue_speech(self.controller.resolve_unheard_follow_up(answer))
+                else:
+                    await self._queue_speech(self.controller.retry_interrupted())
+                self._record("unheard_prompt_recovery", speaker=None, utterance_id=interrupted.id)
+                return
+            self.controller.accept_barge_in_answer(answer)
+            self._interrupted_output_id = None
+            self._record("barge_in_answer_accepted", speaker="candidate", text=answer)
+            self._start_response()
+            return
+        if self.controller.stage is Stage.AWAITING_ANSWER:
+            if not answer:
+                try:
+                    await self._queue_speech(self.controller.submit_answer(""))
+                except LimitReached:
+                    self._record("clarification_limit", speaker=None)
+                return
+            self._latest_candidate_turn = answer
+            self._answer_snapshot = self.controller.answers[
+                self.controller.current_question_number - 1
+            ]
+            self.controller.submit_answer(answer)
+            self._start_response()
+        elif self.controller.stage is Stage.AWAITING_PROPOSAL:
+            if answer:
+                self._answer_snapshot = self.controller.answers[
+                    self.controller.current_question_number - 1
+                ]
+                self.controller.add_answer_continuation(answer)
+                self._latest_candidate_turn = answer
+                self._start_response()
+
+    async def _respond_assigned(self, generation: int) -> None:
+        if self._closed or self._media_paused or generation != self._generation:
+            return
+        if self.controller.stage is Stage.AWAITING_FEEDBACK:
+            # This stage is reused as a terminal closing gate; no feedback is generated.
+            self._record(
+                "inference_started",
+                speaker=None,
+                generation=generation,
+                purpose="assigned_closing",
+                llm_first_token_ms=None,
+            )
+            try:
+                result = await self._infer("assigned_closing", self._payload())
+                text = result.get("text")
+                if (
+                    not isinstance(text, str)
+                    or not text.strip()
+                    or len(text) > 300
+                    or "?" in text
+                    or re.search(r"\b(?:strength|weakness|score|feedback|improve)\b", text, re.I)
+                ):
+                    raise ValueError("Invalid closing speech")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._record(
+                    "response_error",
+                    speaker=None,
+                    generation=generation,
+                    error_type=type(exc).__name__,
+                    failure_stage="closing_inference",
+                )
+                text = "Thank you for your time. That concludes the interview."
+            if generation == self._generation and not self._closed:
+                self._record(
+                    "inference_completed",
+                    speaker=None,
+                    generation=generation,
+                    purpose="assigned_closing",
+                    validated=True,
+                )
+                await self._queue_speech(self.controller.prepare_closing(text))
+            return
+        if self.controller.stage is not Stage.AWAITING_PROPOSAL:
+            return
+        if not self._latest_candidate_turn:
+            return
+        self._record(
+            "inference_started",
+            speaker=None,
+            generation=generation,
+            purpose="assigned_decision",
+            llm_first_token_ms=None,
+        )
+        try:
+            result = await self._infer(
+                "assigned_decision",
+                {
+                    **self._payload(),
+                    "latest_candidate_turn": self._latest_candidate_turn,
+                },
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._record(
+                "response_error",
+                speaker=None,
+                generation=generation,
+                error_type=type(exc).__name__,
+                failure_stage="assigned_decision",
+            )
+            return
+        if generation != self._generation or self._closed or self._media_paused:
+            self._record("inference_stale_discarded", speaker=None, generation=generation)
+            return
+        action = str(result.get("action", "")).lower()
+        speech = result.get("text", "")
+        self._record(
+            "decision_proposed",
+            speaker=None,
+            generation=generation,
+            action=action,
+            text=speech,
+            validated=True,
+        )
+        if action in {"feedback_request", "off_topic", "coach_identity"}:
+            if (
+                self.controller.stage is Stage.AWAITING_PROPOSAL
+                and self._answer_snapshot is not None
+            ):
+                self.controller.restore_answers(self._answer_snapshot)
+            reply = {
+                "feedback_request": (
+                    "I can't provide interview feedback. "
+                    "The hiring team will share any updates directly."
+                ),
+                "off_topic": (
+                    "Let's stay with the interview. You can answer the current question "
+                    "or ask me to repeat it."
+                ),
+                "coach_identity": "You can call me RehearseAI.",
+            }[action]
+            await self._queue_speech(self.controller.prepare_information(reply))
+            return
+        if action == "wait":
+            self._record("awaiting_continuation", speaker=None, generation=generation)
+            return
+        self._record(
+            "inference_completed",
+            speaker=None,
+            generation=generation,
+            purpose="assigned_decision",
+            validated=True,
+        )
+        if action in {"follow_up", "nudge"} and self.controller.remaining_follow_ups > 0:
+            if (
+                isinstance(speech, str)
+                and speech.strip()
+                and len(speech) <= 300
+                and speech.count("?") <= 1
+            ):
+                kind = ReplyKind.FOLLOW_UP if action == "follow_up" else ReplyKind.NUDGE
+                await self._queue_speech(self.controller.propose(kind, speech))
+                return
+        if action == "advance":
+            coverage = result.get("covered_future_questions", [])
+            if isinstance(coverage, list):
+                for item in coverage:
+                    if not isinstance(item, dict):
+                        continue
+                    number = item.get("question_number")
+                    quote = item.get("evidence_quote")
+                    if (
+                        type(number) is int
+                        and isinstance(quote, str)
+                        and self.controller.credit_covered_question(
+                            number, quote, source_turn=self._turn_number
+                        )
+                    ):
+                        self._record(
+                            "question_covered_from_prior_turn",
+                            speaker=None,
+                            question_number=number,
+                            source_turn=self._turn_number,
+                            evidence_quote=quote,
+                        )
+        next_prompt = self.controller.propose(ReplyKind.ADVANCE)
+        if next_prompt:
+            await self._queue_speech(next_prompt)
+        else:
+            self._start_response()
+
     async def _route_opening(self, answer: str, *, allow_interpretation: bool = True) -> bool:
         interrupted = self.controller.interrupted_utterance
         opening_kinds = {
@@ -1475,6 +1762,13 @@ class InterviewSession:
                 await self._cancel_audio()
             if defer_closing:
                 return
+            if self._assigned_plan is not None:
+                await self._queue_speech(
+                    self.controller.prepare_early_feedback(
+                        "Thank you for your time. We'll end the interview here."
+                    )
+                )
+                return
             if reason == "recovery_limit":
                 await self._queue_speech(
                     self.controller.prepare_early_feedback(
@@ -1510,6 +1804,12 @@ class InterviewSession:
             Stage.AWAITING_NO_PROJECT_CHOICE: "no_project_choice",
         }.get(self.controller.stage, "interview")
         return {
+            "assigned_interview": self._assigned_plan,
+            "active_question_plan": (
+                self._assigned_plan["questions"][index - 1]
+                if self._assigned_plan and index
+                else None
+            ),
             "phase": phase,
             "current_question_number": self.controller.current_question_number,
             "current_question": self.controller.current_question,
@@ -1519,6 +1819,7 @@ class InterviewSession:
             "correction_overlays": self.controller.memory.corrections_for_model(),
             "project_established": self.controller.project_established,
             "answers_by_question": [list(turns) for turns in self.controller.answers],
+            "covered_source_turns": list(self.controller.covered_source_turns),
             "answers_by_question_before_latest_turn": answers_before_latest,
             "current_question_answers": current_answers,
             "current_question_answer": " ".join(current_answers),
@@ -1836,6 +2137,9 @@ class InterviewSession:
                 )
 
     async def _respond(self, generation: int) -> None:
+        if self._assigned_plan is not None:
+            await self._respond_assigned(generation)
+            return
         opening_turn: str | None = None
         inference_purpose: str | None = None
         inference_returned = False

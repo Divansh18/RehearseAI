@@ -11,15 +11,12 @@
   <body>
     <main class="shell">
       <header class="site-header">
-        <div class="identity"><a class="brand" href="/dashboard">RehearseAI</a><p>Interview room</p></div>
-        <nav class="account-nav" aria-label="Account">
-          <div class="top-nav"><a href="/dashboard">Overview</a><a href="/interview" aria-current="page">Interview</a><a id="admin-link" href="/admin/interviews" hidden>Admin</a></div>
-          <details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details>
-        </nav>
+        <div class="identity"><span class="brand">RehearseAI</span><p>Interview room</p></div>
+        <nav class="account-nav" aria-label="Interview navigation"><a href="/candidate/welcome">Invitation</a></nav>
       </header>
 
       <section id="setup-panel" class="card setup-panel" aria-labelledby="setup-heading">
-        <div class="setup-heading"><div><span class="eyebrow">Before your interview</span><h1 id="setup-heading">Check your media</h1></div><a href="/dashboard" id="cancel-setup" class="button secondary">Back to overview</a></div>
+        <div class="setup-heading"><div><span class="eyebrow">Before your interview</span><h1 id="setup-heading">Check your media</h1></div><a href="/candidate/welcome" id="cancel-setup" class="button secondary">Back to invitation</a></div>
         <p class="setup-disclosure">One camera snapshot will be saved with your interview and included in the conversation PDF available to the administrator. Camera video and screen sharing are not recorded. Interview audio is processed by the voice services, and the conversation is saved.</p>
         <div class="setup-previews">
           <div class="preview-panel"><span class="preview-label">Camera preview</span><video id="camera-preview" autoplay muted playsinline aria-label="Local camera preview"></video></div>
@@ -42,11 +39,11 @@
 
           <section class="card ai-stage" aria-labelledby="interview-heading">
             <div id="ai-presence" class="ai-presence" data-state="ready"><span class="ai-emblem" aria-hidden="true">R</span><h2 id="interview-heading">RehearseAI</h2><span id="ai-state" class="ai-status" role="status">Ready</span><span class="speaking-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></div>
-            <div class="question-panel"><div class="question-heading"><p id="phase-label" class="phase-label">Before you begin</p><span id="question-count" class="progress" hidden>01 / 04</span></div><p id="question" class="question" aria-live="polite">Four questions about your project, followed by short feedback.</p><p id="guidance" class="guidance">Take a moment to find a project you’d like to talk about.</p><div id="question-progress" class="progress-track" role="img" aria-label="Interview has not started"><span></span><span></span><span></span><span></span></div></div>
+            <div class="question-panel"><div class="question-heading"><p id="phase-label" class="phase-label">Before you begin</p><span id="question-count" class="progress" hidden></span></div><p id="question" class="question" aria-live="polite">The assigned interview begins after device checks.</p><p id="guidance" class="guidance">You can answer each question in your own words.</p><div id="question-progress" class="progress-track" role="img" aria-label="Interview has not started"></div></div>
           </section>
         </div>
         <p id="error" class="error" role="alert" hidden></p>
-        <div class="room-toolbar"><p class="disclosure">AI-generated voice · One camera still is saved for the admin PDF; screen sharing stays local. <span id="snapshot-status" role="status"></span></p><div class="controls"><button id="start" class="primary" type="button" hidden>Start again</button><button id="return-overview" class="secondary" type="button" hidden>Return to overview</button><button id="end" class="danger" type="button" disabled>End interview</button></div></div>
+        <div class="room-toolbar"><p class="disclosure">AI-generated voice · One camera still is saved for the admin PDF; screen sharing stays local. <span id="snapshot-status" role="status"></span></p><div class="controls"><button id="start" class="primary" type="button" hidden>Start again</button><button id="return-overview" class="secondary" type="button" hidden>Return to invitation</button><button id="end" class="danger" type="button" disabled>End interview</button></div></div>
       </dialog>
       <p id="setup-error" class="error" role="alert" hidden></p>
       <audio id="remote-audio" autoplay></audio>

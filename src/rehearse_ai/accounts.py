@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import aiosmtplib
 from fastapi import HTTPException, Request, Response
@@ -74,6 +75,47 @@ class Mailer:
             )
         except (aiosmtplib.SMTPException, OSError, TimeoutError) as exc:
             raise MailDeliveryError("Account email delivery failed") from exc
+
+    async def send_invitation(
+        self,
+        to: str,
+        token: str,
+        *,
+        title: str,
+        scheduled_at: datetime,
+        latest_at: datetime,
+        timezone: str,
+        target_minutes: int,
+    ) -> None:
+        local_start = scheduled_at.astimezone(ZoneInfo(timezone))
+        local_latest = latest_at.astimezone(ZoneInfo(timezone))
+        link = f"{self.config.public_base_url}/join/{quote(token, safe='')}"
+        message = EmailMessage()
+        message["From"] = self.config.smtp_from
+        message["To"] = to
+        message["Subject"] = f"RehearseAI interview invitation: {title}"
+        message.set_content(
+            f"{self.config.interviewer_name} invites you to a RehearseAI interview.\n\n"
+            f"Interview: {title}\n"
+            f"Scheduled: {local_start:%d %B %Y, %H:%M} {timezone}\n"
+            f"Begin between {local_start:%H:%M} and {local_latest:%H:%M} {timezone}.\n"
+            f"Expected duration: about {target_minutes} minutes.\n"
+            "You will need a camera, microphone, speakers, and screen sharing.\n\n"
+            f"Join interview: {link}\n\n"
+            "This private link can be used by anyone who possesses it. Do not forward it."
+        )
+        try:
+            await aiosmtplib.send(
+                message,
+                hostname=self.config.smtp_host,
+                port=self.config.smtp_port,
+                username=self.config.smtp_username,
+                password=self.config.smtp_password,
+                start_tls=self.config.smtp_starttls,
+                timeout=10,
+            )
+        except (aiosmtplib.SMTPException, OSError, TimeoutError) as exc:
+            raise MailDeliveryError("Interview invitation delivery failed") from exc
 
 
 class CandidateManager(UUIDIDMixin, BaseUserManager[Candidate, uuid.UUID]):
@@ -234,21 +276,11 @@ class AccountService:
             raise HTTPException(400, "This link is invalid or has expired")
         await db.commit()
 
-    async def sign_up(self, db: AsyncSession, email: str, password: str) -> None:
-        manager = self.manager(db)
-        try:
-            await manager.create(CandidateCreate(email=email, password=password), safe=True)
-        except (exceptions.UserAlreadyExists, IntegrityError):
-            await db.rollback()
-            return
-        except exceptions.InvalidPasswordException as exc:
-            raise HTTPException(400, str(exc.reason)) from exc
-
     async def login(self, db: AsyncSession, email: str, password: str) -> Response:
         manager = self.manager(db)
         credentials = OAuth2PasswordRequestForm(username=email, password=password, scope="")
         user = await manager.authenticate(credentials)
-        if not user or not user.is_active:
+        if not user or not user.is_active or not user.is_superuser:
             raise HTTPException(401, "Invalid credentials")
         token = await self.strategy(db).write_token(user)
         return await self.cookies.get_login_response(token)

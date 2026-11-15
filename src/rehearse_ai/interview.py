@@ -94,8 +94,10 @@ class UtteranceKind(Enum):
     NO_PROJECT_INVITE = auto()
     NO_PROJECT_SCOPE = auto()
     FEEDBACK = auto()
+    CLOSING = auto()
     EARLY_FEEDBACK = auto()
     CORRECTION_ACK = auto()
+    INFORMATION = auto()
 
 
 @dataclass(frozen=True)
@@ -121,16 +123,33 @@ class InterviewController:
     transport reports playback completed, not that a human heard every word.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        questions: tuple[str, ...] | None = None,
+        *,
+        probe_limits: tuple[int, ...] | None = None,
+        required: tuple[bool, ...] | None = None,
+    ) -> None:
+        self._questions = questions if questions is not None else QUESTIONS
+        self._assigned = questions is not None
+        if not self._questions or len(self._questions) > 12:
+            raise ValueError("Interview needs 1–12 questions")
+        self._probe_limits = probe_limits or (MAX_FOLLOW_UPS_PER_QUESTION,) * len(self._questions)
+        self._required = required or (True,) * len(self._questions)
+        if len(self._probe_limits) != len(self._questions) or len(self._required) != len(
+            self._questions
+        ):
+            raise ValueError("Question metadata length mismatch")
         self._stage = Stage.NEW
         self._question_index = -1
         self._next_utterance_id = 1
         self._pending: Utterance | None = None
         self._interrupted: Utterance | None = None
-        self._answers: list[list[str]] = [[] for _ in QUESTIONS]
+        self._answers: list[list[str]] = [[] for _ in self._questions]
+        self._covered_source_turns: list[int | None] = [None] * len(self._questions)
         self._closing_remarks: list[str] = []
-        self._follow_ups = [0] * len(QUESTIONS)
-        self._clarifications = [0] * len(QUESTIONS)
+        self._follow_ups = [0] * len(self._questions)
+        self._clarifications = [0] * len(self._questions)
         self._greeting_response = ""
         self.memory = SessionMemory()
         self._name_declined = False
@@ -138,7 +157,7 @@ class InterviewController:
         self._name_repeats = 0
         self._detour_resume_prompt: Utterance | None = None
         self._return_after_detour = False
-        self._detours = [0] * len(QUESTIONS)
+        self._detours = [0] * len(self._questions)
         self._choice_repeats = 0
         self._no_project_choice_replies = 0
         self._opening_return_to_name = False
@@ -161,7 +180,15 @@ class InterviewController:
 
     @property
     def current_question(self) -> str | None:
-        return QUESTIONS[self._question_index] if self._question_index >= 0 else None
+        return self._questions[self._question_index] if self._question_index >= 0 else None
+
+    @property
+    def question_count(self) -> int:
+        return len(self._questions)
+
+    @property
+    def current_required(self) -> bool:
+        return self._question_index >= 0 and self._required[self._question_index]
 
     @property
     def pending(self) -> Utterance | None:
@@ -174,6 +201,36 @@ class InterviewController:
     @property
     def answers(self) -> tuple[tuple[str, ...], ...]:
         return tuple(tuple(turns) for turns in self._answers)
+
+    @property
+    def covered_source_turns(self) -> tuple[int | None, ...]:
+        return tuple(self._covered_source_turns)
+
+    def credit_covered_question(
+        self, question_number: int, evidence_quote: str, *, source_turn: int
+    ) -> bool:
+        """Credit later authored coverage only when the quote occurs in an actual current answer."""
+        self._require(Stage.AWAITING_PROPOSAL)
+        target = question_number - 1
+        if (
+            not self._assigned
+            or target <= self._question_index
+            or target >= len(self._questions)
+            or self._covered_source_turns[target] is not None
+            or source_turn < 1
+            or len(evidence_quote.strip()) < 8
+        ):
+            return False
+        answer = (
+            self._answers[self._question_index][-1] if self._answers[self._question_index] else ""
+        ).strip()
+        normalized_answer = " ".join(answer.casefold().split())
+        normalized_quote = " ".join(evidence_quote.casefold().split())
+        if not normalized_quote or normalized_quote not in normalized_answer:
+            return False
+        self._answers[target].append(answer)
+        self._covered_source_turns[target] = source_turn
+        return True
 
     @property
     def closing_remarks(self) -> tuple[str, ...]:
@@ -226,11 +283,35 @@ class InterviewController:
     def decline_name(self) -> None:
         self._name_declined = True
 
-    def acknowledge_correction(self, text: str) -> Utterance:
+    def acknowledge_correction(
+        self,
+        text: str,
+        *,
+        discard_interrupted: bool = False,
+        refund_probe: bool = False,
+    ) -> Utterance:
         if self._stage in {Stage.COMPLETE, Stage.ENDED_EARLY, Stage.EARLY_CLOSING}:
             raise InvalidTransition("The interview has ended")
-        self._correction_return_stage = self._stage
-        self._correction_resume_utterance = self._interrupted
+        interrupted = self._interrupted
+        if (
+            discard_interrupted
+            and interrupted is not None
+            and interrupted.kind
+            in {
+                UtteranceKind.FOLLOW_UP,
+                UtteranceKind.NUDGE,
+                UtteranceKind.CLARIFICATION,
+            }
+        ):
+            if refund_probe and self._question_index >= 0:
+                self._follow_ups[self._question_index] = max(
+                    0, self._follow_ups[self._question_index] - 1
+                )
+            self._correction_return_stage = Stage.AWAITING_PROPOSAL
+            self._correction_resume_utterance = None
+        else:
+            self._correction_return_stage = self._stage
+            self._correction_resume_utterance = interrupted
         self._interrupted = None
         return self._prepare(UtteranceKind.CORRECTION_ACK, text, None)
 
@@ -257,7 +338,7 @@ class InterviewController:
     def remaining_follow_ups(self) -> int:
         if self._question_index < 0:
             return MAX_FOLLOW_UPS_PER_QUESTION
-        return MAX_FOLLOW_UPS_PER_QUESTION - self._follow_ups[self._question_index]
+        return self._probe_limits[self._question_index] - self._follow_ups[self._question_index]
 
     @property
     def remaining_clarifications(self) -> int:
@@ -268,12 +349,14 @@ class InterviewController:
     def remaining_prompts_for(self, question_number: int) -> tuple[int, int]:
         index = question_number - 1
         return (
-            MAX_FOLLOW_UPS_PER_QUESTION - self._follow_ups[index],
+            self._probe_limits[index] - self._follow_ups[index],
             MAX_CLARIFICATIONS_PER_QUESTION - self._clarifications[index],
         )
 
     def start(self) -> Utterance:
         self._require(Stage.NEW)
+        if self._assigned:
+            return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
         return self._prepare(UtteranceKind.GREETING, GREETING, None)
 
     def submit_greeting(self, text: str) -> Utterance | None:
@@ -368,7 +451,7 @@ class InterviewController:
 
     def start_after_opening_question(self) -> Utterance:
         self._require(Stage.AWAITING_OPENING_RETURN)
-        return self._prepare(UtteranceKind.QUESTION, QUESTIONS[0], 0)
+        return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
 
     def retry_name_prompt(self) -> Utterance:
         self._require(Stage.AWAITING_NAME)
@@ -493,7 +576,7 @@ class InterviewController:
             self._stage = Stage.AWAITING_PROPOSAL
             return None
         return self._prepare(
-            UtteranceKind.DETOUR_RESUME, QUESTIONS[self._question_index], self._question_index
+            UtteranceKind.DETOUR_RESUME, self._questions[self._question_index], self._question_index
         )
 
     def repeat_continuation_choice(
@@ -553,7 +636,7 @@ class InterviewController:
             self._stage = Stage.AWAITING_PROPOSAL
             return None
         return self._prepare(
-            UtteranceKind.DETOUR_RESUME, QUESTIONS[self._question_index], self._question_index
+            UtteranceKind.DETOUR_RESUME, self._questions[self._question_index], self._question_index
         )
 
     def restate_project_prompt(self, prompt: Utterance) -> Utterance:
@@ -565,12 +648,12 @@ class InterviewController:
 
     def begin_question_one(self) -> Utterance:
         self._require(Stage.AWAITING_QUESTION_START)
-        return self._prepare(UtteranceKind.QUESTION, QUESTIONS[0], 0)
+        return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
 
     def submit_readiness(self, ready: bool) -> Utterance | None:
         self._require(Stage.AWAITING_READINESS)
         if ready:
-            return self._prepare(UtteranceKind.QUESTION, QUESTIONS[0], 0)
+            return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
         if self._readiness_nudges >= 1:
             return None
         self._readiness_nudges += 1
@@ -618,7 +701,7 @@ class InterviewController:
         text = (
             active_prompt.text
             if active_prompt and active_prompt.question_number == index + 1
-            else QUESTIONS[index]
+            else self._questions[index]
         )
         return self._prepare(UtteranceKind.REPEAT, text, index)
 
@@ -696,19 +779,25 @@ class InterviewController:
         if kind is ReplyKind.ADVANCE:
             if text is not None:
                 raise ValueError("ADVANCE cannot supply speech text")
-            if index == 0 and self._project_established is False:
+            if not self._assigned and index == 0 and self._project_established is False:
                 raise InvalidTransition("A technical example is needed before dependent questions")
-            if index == len(QUESTIONS) - 1:
+            next_index = index + 1
+            while (
+                next_index < len(self._questions)
+                and self._covered_source_turns[next_index] is not None
+            ):
+                next_index += 1
+            if next_index == len(self._questions):
                 self._stage = Stage.AWAITING_FEEDBACK
                 return None
-            return self._prepare(UtteranceKind.QUESTION, QUESTIONS[index + 1], index + 1)
+            return self._prepare(UtteranceKind.QUESTION, self._questions[next_index], next_index)
 
         if kind not in {ReplyKind.FOLLOW_UP, ReplyKind.NUDGE, ReplyKind.CLARIFICATION}:
             raise ValueError("Unsupported project proposal")
 
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Spoken proposal text must be nonempty")
-        if self._follow_ups[index] >= MAX_FOLLOW_UPS_PER_QUESTION:
+        if self._follow_ups[index] >= self._probe_limits[index]:
             raise LimitReached("Extra project prompt limit reached for this question")
         self._follow_ups[index] += 1
         utterance_kind = {
@@ -717,6 +806,28 @@ class InterviewController:
             ReplyKind.CLARIFICATION: UtteranceKind.CLARIFICATION,
         }[kind]
         return self._prepare(utterance_kind, text.strip(), index)
+
+    def prepare_closing(self, text: str) -> Utterance:
+        self._require(Stage.AWAITING_FEEDBACK)
+        if not self._assigned or not text.strip() or len(text) > 500:
+            raise ValueError("Assigned closing must be short and nonempty")
+        return self._prepare(UtteranceKind.CLOSING, text.strip(), None)
+
+    def prepare_information(self, text: str, *, repeat_unheard: bool = False) -> Utterance:
+        if not self._assigned or self._stage not in {
+            Stage.AWAITING_ANSWER,
+            Stage.AWAITING_PROPOSAL,
+            Stage.DELIVERING,
+        }:
+            raise InvalidTransition("No assigned interview question is pending")
+        interrupted = self._interrupted
+        if interrupted and interrupted.question_number is not None:
+            if interrupted.kind is UtteranceKind.QUESTION:
+                self._question_index = interrupted.question_number - 1
+            if repeat_unheard:
+                text = f"{text.strip()} {interrupted.text}"
+        self._interrupted = None
+        return self._prepare(UtteranceKind.INFORMATION, text.strip(), self._question_index)
 
     def prepare_feedback(self, text: str) -> Utterance:
         """Queue validated feedback supplied by the LLM adapter."""
@@ -745,13 +856,25 @@ class InterviewController:
     def skip_current(self) -> Utterance | None:
         """Advance on an explicit skip without recording a fabricated answer."""
         self._require(Stage.AWAITING_ANSWER)
-        if self._question_index == 0 and self._project_established is not True:
+        if (
+            self._assigned
+            and self._required[self._question_index]
+            and not self._answers[self._question_index]
+        ):
+            raise InvalidTransition("Required question must be addressed")
+        if (
+            not self._assigned
+            and self._question_index == 0
+            and self._project_established is not True
+        ):
             raise InvalidTransition("Cannot skip to a dependent question without a project")
-        if self._question_index == len(QUESTIONS) - 1:
+        if self._question_index == len(self._questions) - 1:
             self._stage = Stage.AWAITING_FEEDBACK
             return None
         return self._prepare(
-            UtteranceKind.QUESTION, QUESTIONS[self._question_index + 1], self._question_index + 1
+            UtteranceKind.QUESTION,
+            self._questions[self._question_index + 1],
+            self._question_index + 1,
         )
 
     def skip_interrupted(self) -> Utterance | None:
@@ -841,7 +964,7 @@ class InterviewController:
                 raise RuntimeError("Question utterance has no question number")
             self._question_index = utterance.question_number - 1
             self._stage = Stage.AWAITING_ANSWER
-        elif utterance.kind is UtteranceKind.FEEDBACK:
+        elif utterance.kind in {UtteranceKind.FEEDBACK, UtteranceKind.CLOSING}:
             self._stage = Stage.COMPLETE
         elif utterance.kind is UtteranceKind.EARLY_FEEDBACK:
             self._stage = Stage.ENDED_EARLY
@@ -913,6 +1036,8 @@ class InterviewController:
             UtteranceKind.OPENING_CLARIFICATION,
         }:
             self._stage = Stage.AWAITING_READINESS
+        elif interrupted.kind is UtteranceKind.CLOSING:
+            self._stage = Stage.AWAITING_FEEDBACK
         elif interrupted.kind is UtteranceKind.FEEDBACK:
             self._closing_remarks.append(answer)
             self._stage = Stage.AWAITING_FEEDBACK

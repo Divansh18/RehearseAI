@@ -109,6 +109,38 @@ OPENING_SCHEMA = {
     "required": ["text"],
     "additionalProperties": False,
 }
+ASSIGNED_DECISION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": [
+                "follow_up",
+                "nudge",
+                "wait",
+                "advance",
+                "feedback_request",
+                "off_topic",
+                "coach_identity",
+            ],
+        },
+        "text": {"type": "string"},
+        "covered_future_questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question_number": {"type": "integer"},
+                    "evidence_quote": {"type": "string"},
+                },
+                "required": ["question_number", "evidence_quote"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["action", "text", "covered_future_questions"],
+    "additionalProperties": False,
+}
 
 
 class InterviewInput(FrameProcessor):
@@ -258,6 +290,8 @@ def inference_adapter(llm: OpenAILLMService):
             "opening_ack": OPENING_SCHEMA,
             "feedback": FEEDBACK_SCHEMA,
             "early_feedback": FEEDBACK_SCHEMA,
+            "assigned_decision": ASSIGNED_DECISION_SCHEMA,
+            "assigned_closing": OPENING_SCHEMA,
         }[kind]
         response = await llm.run_inference(
             LLMContext(messages=[{"role": "user", "content": json.dumps(payload)}]),
@@ -285,12 +319,14 @@ class LiveSession:
         candidate_id: str | None = None,
         session_id: str | None = None,
         event_sink: Callable[[dict[str, Any]], bool] | None = None,
+        interview_plan: dict[str, Any],
+        self_reported_name: str | None = None,
     ) -> None:
         self.connection = connection
         self.candidate_id = candidate_id
         self.log = SessionLog(settings.session_dir, session_id or str(uuid.uuid4()), event_sink)
         if candidate_id is not None:
-            self.log.record("candidate_authenticated", candidate_id=candidate_id)
+            self.log.record("assignment_session_authenticated", assignment_id=candidate_id)
         self.log.record(
             "stt_configured",
             model=settings.stt_model,
@@ -324,6 +360,8 @@ class LiveSession:
             turn_pause_secs=settings.turn_pause_secs,
             cancel_audio=input_adapter.cancel_audio,
             build_id=build_id,
+            interview_plan=interview_plan,
+            self_reported_name=self_reported_name,
         )
         input_adapter.session = self.session
         audio_observer.session = self.session

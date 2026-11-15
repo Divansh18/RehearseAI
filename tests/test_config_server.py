@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +10,7 @@ from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 
-from rehearse_ai.config import ConfigurationError, Settings
+from rehearse_ai.config import AuthConfig, ConfigurationError, Settings
 from rehearse_ai.interview import Stage
 from rehearse_ai.pipeline import InterviewInput, LiveSession
 from rehearse_ai.server import create_app
@@ -20,6 +21,24 @@ AUTH_ENV = {
     "REHEARSE_PUBLIC_BASE_URL": "http://127.0.0.1:7860",
     "REHEARSE_SMTP_HOST": "127.0.0.1",
     "REHEARSE_SMTP_FROM": "RehearseAI <no-reply@localhost>",
+}
+
+ASSIGNED_PLAN = {
+    "title": "Synthetic interview",
+    "purpose": "Discuss a project",
+    "questions": [
+        {
+            "topic": "Project",
+            "question": "Describe a project you built.",
+            "required": True,
+            "follow_up_guidance": "Ask about ownership",
+            "max_probes": 1,
+        }
+    ],
+    "focus_areas": [],
+    "target_minutes": 10,
+    "interviewer_style": "Concise and curious",
+    "closing_instructions": "Thank the candidate",
 }
 
 
@@ -107,7 +126,17 @@ def test_account_configuration_requires_database_secret_and_production_transport
 
 
 def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
-    settings = Settings(deepgram_api_key="test-dg", openai_api_key="test-oa", session_dir=tmp_path)
+    test_url = os.environ.get(
+        "REHEARSE_TEST_DATABASE_URL",
+        "postgresql+asyncpg://rehearse:rehearse_local_only@127.0.0.1:5433/rehearse_test",
+    )
+    assert test_url.rsplit("/", 1)[-1].endswith("_test")
+    settings = Settings(
+        deepgram_api_key="test-dg",
+        openai_api_key="test-oa",
+        session_dir=tmp_path,
+        auth=AuthConfig(database_url=test_url, secret="test-secret-at-least-thirty-two-characters"),
+    )
     with TestClient(create_app(settings)) as client:
         health_response = client.get("/healthz")
         health = health_response.json()
@@ -117,7 +146,7 @@ def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
         assert client.get("/", follow_redirects=False).status_code == 303
         page = client.get("/login")
         assert page.status_code == 200
-        assert "Create account" in page.text
+        assert "Sign in" in page.text
         assert page.headers["cache-control"] == "no-store"
         assert client.get("/assets/app.js").status_code == 200
         assert client.get("/assets/media_setup.js").status_code == 200
@@ -125,7 +154,7 @@ def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
         theme = client.get("/assets/theme.css")
         assert theme.status_code == 200 and theme.headers["content-type"].startswith("text/css")
         assert client.get("/assets/account.js").status_code == 200
-        assert client.get("/interview", follow_redirects=False).status_code == 303
+        assert client.get("/interview", follow_redirects=False).status_code == 401
         assert client.post("/api/offer", json={"type": "bad"}).status_code == 401
 
 
@@ -138,7 +167,9 @@ async def test_locked_pipecat_pipeline_assembles_without_provider_calls(tmp_path
         session_dir=tmp_path,
     )
     connection = SmallWebRTCConnection()
-    live = LiveSession(connection, settings)
+    with pytest.raises(TypeError, match="interview_plan"):
+        LiveSession(connection, settings)
+    live = LiveSession(connection, settings, interview_plan=ASSIGNED_PLAN)
     names = [type(processor).__name__ for processor in live.pipeline.processors]
     assert names.index("DeepgramSTTService") < names.index("InterviewInput")
     assert names.index("InterviewInput") < names.index("ObservedCartesiaTTSService")
@@ -164,7 +195,7 @@ async def test_voice_session_waits_for_explicit_begin_control(tmp_path):
         session_dir=tmp_path,
     )
     connection = SmallWebRTCConnection()
-    live = LiveSession(connection, settings)
+    live = LiveSession(connection, settings, interview_plan=ASSIGNED_PLAN)
     live.session._queue_speech = AsyncMock()
     assert live.session.controller.stage is Stage.NEW
     await live._transport._call_event_handler("on_client_connected", connection)
@@ -202,7 +233,7 @@ async def test_tts_one_does_not_receive_unsupported_style_instructions(tmp_path)
         openai_tts_model="tts-1",
     )
     connection = SmallWebRTCConnection()
-    live = LiveSession(connection, settings)
+    live = LiveSession(connection, settings, interview_plan=ASSIGNED_PLAN)
     tts = next(p for p in live.pipeline.processors if isinstance(p, OpenAITTSService))
     assert tts._settings.instructions is None
     assert tts._stop_frame_timeout_s == 20.0
@@ -219,7 +250,7 @@ async def test_pipeline_provider_error_reaches_session_log(tmp_path):
         session_dir=tmp_path,
     )
     connection = SmallWebRTCConnection()
-    live = LiveSession(connection, settings)
+    live = LiveSession(connection, settings, interview_plan=ASSIGNED_PLAN)
     tts = next(p for p in live.pipeline.processors if isinstance(p, CartesiaTTSService))
     await live.worker._call_event_handler(
         "on_pipeline_error", ErrorFrame(error="synthetic TTS failure", processor=tts)

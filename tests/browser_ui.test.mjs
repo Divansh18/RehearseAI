@@ -110,7 +110,7 @@ function fixture({ active = true, fetchResponse } = {}) {
     },
     location: { assigned: null, assign(path) { this.assigned = path; } },
     fetch: fetchResponse || (async () => ({
-      ok: true, status: 200, json: async () => ({ role: 'candidate' }),
+      ok: true, status: 200, json: async () => ({ self_reported_name: 'Nyla Example', question_count: 4, can_begin: true, window_state: 'open', status: 'assigned' }),
     })),
     AbortController,
     setTimeout: (fn) => { const id = nextTimer++; timeouts.set(id, fn); return id; },
@@ -132,7 +132,8 @@ function fixture({ active = true, fetchResponse } = {}) {
 }
 
 test('prepared speech does not present a question; output and interruption update room state', () => {
-  const { nodes, send } = fixture();
+  const { nodes, send, context } = fixture();
+  vm.runInContext('questionTotal = 4;', context);
   send({ event: 'agent_prepared', utterance_id: 1, utterance_kind: 'question', question_number: 1, text: 'Question one.' });
   assert.equal(nodes['question-count'].hidden, true);
   assert.equal(nodes.connection.textContent, 'Preparing');
@@ -232,7 +233,7 @@ test('two Begin clicks cannot create duplicate connection attempts', async () =>
     requests += 1;
     return new Promise((resolve) => { resolveAccount = resolve; });
   } });
-  vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
+  vm.runInContext('invitationReady = true; mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
   context.document.querySelector('#snapshot-consent').checked = true;
   const first = context.startSession();
   const second = context.startSession();
@@ -241,27 +242,23 @@ test('two Begin clicks cannot create duplicate connection attempts', async () =>
   await Promise.all([first, second]);
 });
 
-test('expired account redirects before microphone access or WebRTC setup', async () => {
+test('expired invitation redirects before microphone access or WebRTC setup', async () => {
   const { context, nodes } = fixture({
     active: false,
     fetchResponse: async () => ({ ok: false, status: 401 }),
   });
-  vm.runInContext('mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
+  vm.runInContext('invitationReady = true; mediaSetup = { ready: () => true, microphone: { getAudioTracks: () => [] }, showRoomPreviews() {}, cleanup() {} };', context);
   nodes['snapshot-consent'].checked = true;
   await context.startSession();
-  assert.equal(context.location.assigned, '/login?reason=expired');
+  assert.equal(context.location.assigned, '/candidate/welcome');
   assert.equal(nodes.end.disabled, true);
 });
 
-test('admin navigation appears only for the authenticated admin role', async () => {
-  const candidate = fixture();
-  await candidate.context.checkAccount();
-  assert.equal(candidate.nodes['admin-link'].hidden, true);
-  const admin = fixture({
-    fetchResponse: async () => ({ ok: true, status: 200, json: async () => ({ role: 'admin' }) }),
-  });
-  await admin.context.checkAccount();
-  assert.equal(admin.nodes['admin-link'].hidden, false);
+test('invitation metadata sets assigned question count without exposing a plan', async () => {
+  const interview = fixture({ fetchResponse: async () => ({ ok: true, status: 200,
+    json: async () => ({ self_reported_name: 'Nyla Example', question_count: 3, can_begin: true, window_state: 'open', status: 'assigned' }) }) });
+  await interview.context.checkAccount();
+  assert.equal(interview.nodes['question-progress'].children.length, 3);
 });
 
 test('End session releases tracks and connections immediately', () => {
@@ -278,12 +275,12 @@ test('End session releases tracks and connections immediately', () => {
   assert.equal(track.readyState, 'ended');
   assert.equal(nodes.microphone.textContent, 'Microphone off');
   assert.equal(nodes.connection.textContent, 'Ended');
-  assert.equal(nodes.start.disabled, false);
+  assert.equal(nodes['return-overview'].hidden, false);
   assert.equal(nodes.end.disabled, true);
-  assert.equal(nodes.start.textContent, 'Start again');
+  assert.equal(nodes.start.hidden, true);
 });
 
-test('closing feedback drains before automatic cleanup and freezes timer', () => {
+test('professional closing drains before automatic cleanup and freezes timer', () => {
   const { nodes, context, send, timeouts, intervals, flushTimeouts } = fixture();
   const closed = [];
   const track = { readyState: 'live', stop: () => { track.readyState = 'ended'; } };
@@ -294,7 +291,7 @@ test('closing feedback drains before automatic cleanup and freezes timer', () =>
   vm.runInContext('microphone = fakeStream; peer = fakePeer; channel = fakeChannel;', context);
   send({ event: 'session_started', session_id: 'session-a' });
   assert.equal(intervals.size, 1);
-  send({ event: 'agent_prepared', utterance_id: 8, utterance_kind: 'feedback', text: 'Good work.' });
+  send({ event: 'agent_prepared', utterance_id: 8, utterance_kind: 'closing', text: 'Thank you for your time.' });
   send({ event: 'agent_output_started', utterance_id: 8 });
   send({ event: 'agent_delivery_reported', utterance_id: 8 });
   send({ event: 'interview_complete' });
@@ -307,7 +304,7 @@ test('closing feedback drains before automatic cleanup and freezes timer', () =>
   assert.equal(track.readyState, 'ended');
   assert.equal(nodes.connection.textContent, 'Ended');
   assert.equal(nodes.microphone.textContent, 'Microphone off');
-  assert.equal(nodes.start.textContent, 'Start again');
+  assert.equal(nodes['return-overview'].hidden, false);
   assert.equal(nodes['phase-label'].textContent, 'Interview complete');
   assert.equal(intervals.size, 0);
   send({ event: 'agent_prepared', utterance_id: 9, text: 'Late question.' });
@@ -380,7 +377,7 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   const signals = [];
   let offerBody;
   const { nodes, context } = fixture({ active: false, fetchResponse: async (url, options) => {
-    if (url === '/api/auth/me') return { ok: true, status: 200, json: async () => ({ role: 'candidate' }) };
+    if (url === '/api/candidate/interview') return { ok: true, status: 200, json: async () => ({ self_reported_name: 'Nyla Example', question_count: 4, can_begin: true, window_state: 'open', status: 'assigned' }) };
     if (url === '/api/csrf') return { ok: true, json: async () => ({ token: 'synthetic' }) };
     if (url === '/api/offer') {
       offerBody = JSON.parse(options.body);
@@ -418,7 +415,7 @@ test('Begin keeps the existing camera and screen streams in the room and sends o
   setup.speakerTonePlayed = true;
   setup.confirmSpeaker();
   context.syntheticSetup = setup;
-  vm.runInContext('mediaSetup = syntheticSetup;', context);
+  vm.runInContext('mediaSetup = syntheticSetup; invitationReady = true;', context);
   setup.update();
   context.updateMediaLabels();
   assert.equal(setup.ready(), true);
@@ -548,5 +545,5 @@ test('End remains available while the media-loss overlay is open', () => {
   assert.equal(nodes.connection.textContent, 'Ended');
   assert.equal(nodes['media-loss-overlay'].hidden, true);
   assert.equal(nodes['interview-workspace'].hidden, false);
-  assert.equal(nodes.start.hidden, false);
+  assert.equal(nodes['return-overview'].hidden, false);
 });

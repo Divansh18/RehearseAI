@@ -28,20 +28,6 @@ function show(message, error = false) {
   target.hidden = false;
 }
 
-async function dashboard() {
-  try {
-    const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
-    if (!response.ok) { location.assign('/login'); return; }
-    const account = await response.json();
-    document.querySelector('#candidate-email').textContent = account.email;
-    document.querySelector('#admin-link').hidden = account.role !== 'admin';
-  } catch { show('Could not load your account. Refresh the page.', true); }
-  document.querySelector('#logout').addEventListener('click', async () => {
-    try { await post('/api/auth/logout'); location.assign('/login'); }
-    catch (error) { show(error.message, true); }
-  });
-}
-
 function account() {
   const route = location.pathname;
   const reason = new URLSearchParams(location.search).get('reason');
@@ -56,9 +42,7 @@ function account() {
   if (hasToken) history.replaceState(null, '', location.pathname);
   const token = hasToken;
   const modes = {
-    '/login': ['Sign in', 'Continue to your interview workspace.', 'Sign in'],
-    '/signup': ['Create account', 'Create an account to access your interviews.', 'Create account'],
-    '/verify': ['Verify email', 'A previously issued verification link may be used here.', 'Verify email'],
+    '/login': ['Administrator sign in', 'Manage your company interviews.', 'Sign in'],
     '/reset-password': ['Reset password', 'Set a new password for your account.', 'Reset password'],
   };
   const [heading, copy, action] = modes[route] || modes['/login'];
@@ -70,19 +54,16 @@ function account() {
     show('Your session expired. Sign in again to continue.');
   } else if (route === '/login' && reason === 'required') {
     show('Sign in to continue.');
-  } else if (route === '/login' && reason === 'registered') {
-    show('Account created. Sign in to continue.');
   }
   submit.textContent = action;
-  email.hidden = route === '/verify' || route === '/reset-password';
+  email.hidden = route === '/reset-password';
   document.querySelector('#email-label').hidden = email.hidden;
   email.required = !email.hidden;
-  password.hidden = route === '/verify';
+  password.hidden = false;
   document.querySelector('#password-label').hidden = password.hidden;
   password.required = !password.hidden;
-  password.autocomplete = route === '/signup' || route === '/reset-password'
+  password.autocomplete = route === '/reset-password'
     ? 'new-password' : 'current-password';
-  if (route === '/verify' && !token) show('This verification link is missing a token.', true);
   if (route === '/reset-password' && !token) {
     title.textContent = 'Request password reset';
     intro.textContent = 'If the account exists, a reset link goes to the configured email service. Local development captures mail in Mailpit.';
@@ -101,9 +82,7 @@ function account() {
     submit.textContent = 'Please wait…';
     try {
       const address = email.value.trim();
-      if (route === '/login') { await post('/api/auth/login', { email: address, password: password.value }); location.assign('/dashboard'); return; }
-      if (route === '/signup') { await post('/api/auth/signup', { email: address, password: password.value }); location.assign('/login?reason=registered'); return; }
-      if (route === '/verify') { const result = await post('/api/auth/verify', { token }); show(result.message); }
+      if (route === '/login') { await post('/api/auth/login', { email: address, password: password.value }); location.assign('/admin/interviews'); return; }
       if (route === '/reset-password' && token) { const result = await post('/api/auth/reset-password', { token, password: password.value }); show(result.message); }
       if (route === '/reset-password' && !token) { const result = await post('/api/auth/request-reset', { email: address }); show(result.message); }
     } catch (error) { show(error.message, true); }
@@ -112,5 +91,4 @@ function account() {
   document.querySelector('#forgot').addEventListener('click', () => location.assign('/reset-password'));
 }
 
-if (location.pathname === '/dashboard') dashboard();
-else account();
+account();

@@ -130,7 +130,7 @@ async function main() {
     if (identity) identity.textContent = me.email;
     const adminLink = document.querySelector('#admin-link');
     if (adminLink && me.role === 'admin') adminLink.hidden = false;
-    if (location.pathname.endsWith('/dashboard') || location.pathname === '/admin/interviews') {
+    if (location.pathname === '/admin/interviews') {
       await loadList();
       document.querySelector('#previous').addEventListener('click', async () => { currentPage -= 1; await loadList(); });
       document.querySelector('#next').addEventListener('click', async () => { currentPage += 1; await loadList(); });

@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer"><title>RehearseAI — Candidate assignments</title>
+  <link rel="stylesheet" href="/assets/theme.css?v=__BUILD_ID__">
+  <link rel="stylesheet" href="/assets/account.css?v=__BUILD_ID__">
+</head><body><main class="dashboard-shell">
+  <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div>
+    <nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews">Records</a><a href="/admin/blueprints">Blueprints</a><a href="/admin/assignments" aria-current="page">Assignments</a></div><button id="logout" class="secondary" type="button">Log out</button></nav></header>
+  <div class="dashboard-title"><div><span class="eyebrow">Private invitations</span><h1>Candidate assignments</h1><p>Assign a published blueprint to one candidate and a joining window.</p></div></div>
+  <p id="message" role="alert" hidden></p>
+  <section class="account-card"><h2>Assignment</h2>
+    <form id="assignment-form"><input id="assignment-id" type="hidden">
+      <label for="version">Published blueprint version</label><select id="version" required></select>
+      <label for="candidate-email">Candidate email</label><input id="candidate-email" type="email" required>
+      <label for="candidate-name">Candidate full name, if known</label><input id="candidate-name" autocomplete="off">
+      <label for="candidate-focus">Candidate-specific focus areas, one per line</label><textarea id="candidate-focus"></textarea>
+      <label for="scheduled-start">Scheduled start with UTC offset</label><input id="scheduled-start" type="text" placeholder="2026-11-15T14:00+05:30" required>
+      <label for="latest-start">Latest permitted start with UTC offset</label><input id="latest-start" type="text" placeholder="2026-11-15T15:00+05:30" required>
+      <label for="timezone">IANA timezone</label><input id="timezone" value="Asia/Kolkata" required>
+      <label for="candidate-instructions">Candidate-facing instructions</label><textarea id="candidate-instructions" maxlength="1000"></textarea>
+      <button class="primary" type="submit">Create assignment and send invitation</button>
+    </form>
+    <p class="fineprint">Local development sends to Mailpit only. A failed send leaves the assignment available for resend. Questions and private notes are never included in invitation mail.</p>
+  </section>
+  <section class="account-card pdf-card"><h2>Assignments</h2><div id="assignment-list" class="record-list"></div></section>
+</main><script src="/assets/admin_setup.js?v=__BUILD_ID__" defer></script></body></html>

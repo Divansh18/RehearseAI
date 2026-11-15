@@ -42,6 +42,7 @@ class AuthConfig:
     smtp_password: str | None = field(default=None, repr=False)
     smtp_starttls: bool = False
     session_seconds: int = 43200
+    interviewer_name: str = "RehearseAI"
 
     @property
     def secure_cookie(self) -> bool:
@@ -141,6 +142,13 @@ class Settings:
             raise ConfigurationError("Production REHEARSE_PUBLIC_BASE_URL must use HTTPS")
         smtp_host = values.get("REHEARSE_SMTP_HOST", "").strip()
         smtp_from = values.get("REHEARSE_SMTP_FROM", "").strip()
+        interviewer_name = values.get("REHEARSE_INTERVIEWER_NAME", "RehearseAI").strip()
+        if (
+            not interviewer_name
+            or len(interviewer_name) > 100
+            or any(char in interviewer_name for char in "\r\n<>")
+        ):
+            raise ConfigurationError("REHEARSE_INTERVIEWER_NAME must be 1–100 plain characters")
         if not smtp_host or not smtp_from or "@" not in smtp_from:
             raise ConfigurationError("REHEARSE_SMTP_HOST and REHEARSE_SMTP_FROM are required")
         smtp_username = values.get("REHEARSE_SMTP_USERNAME", "").strip() or None
@@ -249,5 +257,6 @@ class Settings:
                 smtp_username=smtp_username,
                 smtp_password=smtp_password,
                 smtp_starttls=smtp_starttls == "true",
+                interviewer_name=interviewer_name,
             ),
         )
