@@ -1,14 +1,14 @@
 # RehearseAI plan
 
-The current product workflow and migration decisions are in [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md). This repository now serves administrator-authored, versioned interview blueprints assigned to individual candidates through private invitations. Admins retain account login and review; candidates use a restricted invitation session and have no account/dashboard/PDF access. The earlier four-question practice-coach flow is historical and is not the web entry path.
+The target and transitional workflow are in [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md). Current admin pages show existing assignments and records. New interview scheduling is being updated; manual blueprint/assignment authoring has been retired. Existing frozen assigned plans remain executable.
 
-## Current architecture
+## Current boundaries
 
-- PostgreSQL holds admin accounts, immutable blueprint versions, assignments, invitation-session digests, audit actions, attempts, transcript rows and PDF status. Migration `0005_assigned_interviews` preserves legacy records.
-- FastAPI handles admin APIs, invitation redemption/CSRF, candidate welcome/setup, SmallWebRTC signaling and private admin PDF downloads.
-- The provider-independent controller owns question order, required coverage, bounded probes, interruption and delivery-aware state. The session router decides controls before model inference and rejects stale responses. Pipecat keeps Deepgram STT, OpenAI text inference and Cartesia/OpenAI TTS separate.
-- The browser checks media locally, preserves preview streams through the modal room and uploads one acknowledged camera still after session start. The bounded writer persists transcript events; terminal records trigger local PDF generation.
+- `assigned.py` validates a structured interview plan and joining window. Published versions remain immutable. The next milestone's résumé/JD preparation service should produce a validated `BlueprintContent` before a server-owned assignment is created; no parser, generator or scheduler exists yet.
+- `server.py` owns admin auth, invitation/session access, read-only plan inspection, existing assignment recovery, WebRTC setup and protected record/PDF routes. PostgreSQL migrations preserve historical data.
+- `interview.py` owns plan progression and delivery-aware state; `session.py` routes turns and corrections; `pipeline.py` assembles Deepgram STT, OpenAI text inference and Cartesia TTS. No candidate account or admin question editor is offered.
+- Browser media setup and the compact interview room remain unchanged. The bounded writer persists transcript events; terminal records trigger private PDF generation.
 
-## Verification gates and open work
+## Next milestone and verification gates
 
-Run PostgreSQL tests, browser fixture tests, Ruff, lockfile/build checks, then inspect the local admin/invitation pages in a real browser and a synthetic Mailpit flow. Real microphone interviewing, production SMTP delivery, cross-device screen-capture support and conversational model quality remain separate live checks. Joining a started/interrupted attempt does not resume it; an administrator must create a fresh assignment. Local PDF and snapshot storage need backups before production use. No public deployment is included.
+Implement the one Schedule interview form and validated AI plan preparation without exposing authored questions to candidates. Preserve version isolation and existing invitations. Before release, verify PostgreSQL security/concurrency, browser and Mailpit flow, migrations, lock/build, and a live device interview. Real microphone behavior, production SMTP, resume after disconnect, model relevance and local storage backups remain open checks.

@@ -80,6 +80,19 @@ async function loadList() {
   renderList(await getJson(`/api/${admin ? 'admin/' : ''}interviews?${params}`), admin);
 }
 
+async function loadAssignmentOverview() {
+  const assignments = await getJson('/api/admin/assignments');
+  const container = document.querySelector('#assignment-overview');
+  container.replaceChildren();
+  assignments.slice(0, 5).forEach((assignment) => {
+    const row = item('div', '', 'record-row');
+    row.append(item('strong', assignment.candidate_email));
+    row.append(item('small', `${label(assignment.status)} · invitation email: ${assignment.mail_status}`));
+    container.append(row);
+  });
+  if (!assignments.length) container.append(item('p', 'No existing assignments. New scheduling is being updated.', 'muted'));
+}
+
 async function loadDetail() {
   const admin = location.pathname.startsWith('/admin');
   const id = location.pathname.split('/').at(-1);
@@ -131,6 +144,7 @@ async function main() {
     const adminLink = document.querySelector('#admin-link');
     if (adminLink && me.role === 'admin') adminLink.hidden = false;
     if (location.pathname === '/admin/interviews') {
+      await loadAssignmentOverview();
       await loadList();
       document.querySelector('#previous').addEventListener('click', async () => { currentPage -= 1; await loadList(); });
       document.querySelector('#next').addEventListener('click', async () => { currentPage += 1; await loadList(); });

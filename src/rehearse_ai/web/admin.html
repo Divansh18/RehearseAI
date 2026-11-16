@@ -9,9 +9,12 @@
 </head>
 <body>
   <main class="dashboard-shell">
-    <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div><nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews" aria-current="page">Records</a><a href="/admin/blueprints">Blueprints</a><a href="/admin/assignments">Assignments</a></div><details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details></nav></header>
+    <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div><nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews" aria-current="page">Records</a><a href="/admin/assignments">Assignments</a></div><details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details></nav></header>
     <div class="dashboard-title"><div><span class="eyebrow">Admin</span><h1>All interviews</h1><p>Signed in as <strong id="candidate-email">Loading…</strong></p></div></div>
-    <section class="account-card">
+    <section class="account-card"><h2>New interview scheduling is being updated.</h2><p class="muted">Existing invitations and saved interview records remain available.</p></section>
+    <section class="account-card pdf-card"><h2>Existing assignments</h2><div id="assignment-overview" class="record-list"><p class="muted">Loading assignments…</p></div><a href="/admin/assignments">View all assignments and invitation actions</a></section>
+    <section class="account-card pdf-card">
+      <h2>Interview records</h2>
       <form id="filters" class="filter-row">
         <label>Candidate email <input id="email-filter" type="search" autocomplete="off"></label>
         <label>Status <select id="status-filter"><option value="">All</option><option value="starting">Starting</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="ended_early">Ended early</option><option value="interrupted">Interrupted</option><option value="failed">Failed</option></select></label>

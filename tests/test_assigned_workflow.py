@@ -8,13 +8,17 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from rehearse_ai.accounts_db import (
     BlueprintVersion,
     Candidate,
+    InterviewAssignment,
+    InterviewBlueprint,
 )
 from rehearse_ai.admin import create_admin
+from rehearse_ai.assigned import invitation_token, token_digest
 from rehearse_ai.config import AuthConfig, Settings
 from rehearse_ai.interview import InterviewController, InvalidTransition, ReplyKind, Stage
 from rehearse_ai.server import create_app
@@ -51,6 +55,58 @@ PLAN = {
     "interviewer_style": "Calm, concise and curious",
     "closing_instructions": "Thank the candidate briefly",
 }
+
+
+async def existing_assignment(admin_email, *, version_id=None, candidate_email=None, start=None):
+    """Seed a frozen historical plan/assignment without a retired authoring API."""
+    engine = create_async_engine(TEST_URL)
+    token = invitation_token()
+    instant = datetime.now(UTC)
+    start = start or instant - timedelta(minutes=2)
+    try:
+        async with async_sessionmaker(engine).begin() as db:
+            if version_id is None:
+                admin_id = await db.scalar(
+                    select(Candidate.id).where(Candidate.email == admin_email)
+                )
+                blueprint = InterviewBlueprint(
+                    created_by=admin_id,
+                    draft=PLAN.copy(),
+                    created_at=instant,
+                    updated_at=instant,
+                )
+                db.add(blueprint)
+                await db.flush()
+                version = BlueprintVersion(
+                    blueprint_id=blueprint.id,
+                    version=1,
+                    content=PLAN.copy(),
+                    published_at=instant,
+                )
+                db.add(version)
+                await db.flush()
+                version_id = version.id
+            assignment = InterviewAssignment(
+                blueprint_version_id=version_id,
+                candidate_email=candidate_email or f"invented-{uuid.uuid4().hex}@example.com",
+                candidate_name="Nyla Example",
+                adjustments={"focus_areas": ["Queues"]},
+                candidate_instructions="Have a quiet place ready.",
+                scheduled_start_at=start,
+                latest_start_at=instant + timedelta(minutes=30),
+                timezone="Etc/UTC",
+                status="assigned",
+                invitation_digest=token_digest(token),
+                invitation_expires_at=instant + timedelta(minutes=30),
+                mail_status="sent",
+                created_at=instant,
+                updated_at=instant,
+            )
+            db.add(assignment)
+            await db.flush()
+            return str(assignment.id), str(version_id), token
+    finally:
+        await engine.dispose()
 
 
 def deliver(session):
@@ -314,7 +370,7 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
     with TestClient(app, client=(f"test-{uuid.uuid4().hex}", 50000)) as admin:
         csrf = admin.get("/api/csrf").json()["token"]
         headers = {"X-CSRF-Token": csrf}
-        assert admin.get("/admin/blueprints").status_code == 401
+        assert admin.get("/admin/assignments").status_code == 401
         assert (
             admin.post(
                 "/api/auth/signup", json={"email": "candidate@example.com", "password": PASSWORD}
@@ -325,48 +381,32 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
             "/api/auth/login", json={"email": admin_email, "password": PASSWORD}, headers=headers
         )
         assert login.status_code == 204
-        created = admin.post("/api/admin/blueprints", json=PLAN, headers=headers)
-        assert created.status_code == 201, created.text
-        blueprint_id = created.json()["id"]
-        published = admin.post(f"/api/admin/blueprints/{blueprint_id}/publish", headers=headers)
-        assert published.status_code == 200, published.text
-        version_id = published.json()["id"]
-        updated = {**PLAN, "title": "A changed draft"}
+        assert admin.get("/admin/blueprints").status_code == 404
+        assert admin.post("/api/admin/blueprints", json=PLAN, headers=headers).status_code == 404
+        assert admin.get("/api/admin/blueprints").status_code == 404
+        assert admin.get("/admin/assignments").status_code == 200
+        assert "New interview scheduling is being updated" in admin.get("/admin/interviews").text
+
+        assignment_id, version_id, token = asyncio.run(existing_assignment(admin_email))
+        payload = {
+            "candidate_email": admin.get(f"/api/admin/assignments/{assignment_id}").json()[
+                "candidate_email"
+            ]
+        }
+        assert (
+            admin.get(f"/api/admin/blueprint-versions/{version_id}").json()["content"]["title"]
+            == PLAN["title"]
+        )
+        assert (
+            admin.post("/api/admin/assignments", json=payload, headers=headers).status_code == 405
+        )
         assert (
             admin.put(
-                f"/api/admin/blueprints/{blueprint_id}", json=updated, headers=headers
+                f"/api/admin/assignments/{assignment_id}", json=payload, headers=headers
             ).status_code
-            == 200
+            == 405
         )
-
-        instant = datetime.now(UTC)
-        payload = {
-            "blueprint_version_id": version_id,
-            "candidate_email": f"invented-{uuid.uuid4().hex}@example.com",
-            "candidate_name": "Nyla Example",
-            "focus_areas": ["Queues"],
-            "candidate_instructions": "Have a quiet place ready.",
-            "scheduled_start_at": (instant - timedelta(minutes=2)).isoformat(),
-            "latest_start_at": (instant + timedelta(minutes=20)).isoformat(),
-            "timezone": "Etc/UTC",
-        }
-        assigned = admin.post("/api/admin/assignments", json=payload, headers=headers)
-        assert assigned.status_code == 201, assigned.text
-        assignment_id = assigned.json()["id"]
-        assert assigned.json()["mail_status"] == "sent"
-        assert len(invitations) == 1
-        token = invitations[0][1]
-
-        async def immutable_version():
-            engine = create_async_engine(TEST_URL)
-            try:
-                async with async_sessionmaker(engine)() as db:
-                    row = await db.get(BlueprintVersion, uuid.UUID(version_id))
-                    return row.content["title"]
-            finally:
-                await engine.dispose()
-
-        assert asyncio.run(immutable_version()) == PLAN["title"]
+        assert len(invitations) == 0
         candidate_app = create_app(settings)
         with TestClient(candidate_app, client=(f"test-{uuid.uuid4().hex}", 50001)) as candidate:
             assert candidate.get(f"/join/{token}").status_code == 200
@@ -382,7 +422,7 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
             )
             assert redeemed.status_code == 200, redeemed.text
             assert "httponly" in redeemed.headers["set-cookie"].lower()
-            assert candidate.get("/api/admin/blueprints").status_code == 401
+            assert candidate.get(f"/api/admin/blueprint-versions/{version_id}").status_code == 401
             assert candidate.get("/api/admin/interviews").status_code == 401
             info = candidate.get("/api/candidate/interview")
             assert info.status_code == 200
@@ -396,7 +436,7 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
                 == 200
             )
             assert candidate.get("/interview").status_code == 200
-            assert candidate.get("/api/interviews").status_code == 403
+            assert candidate.get("/api/interviews").status_code == 404
             assert candidate.get(f"/api/interviews/{uuid.uuid4()}/pdf").status_code == 401
             offer = {
                 "sdp": "synthetic-offer",
@@ -435,7 +475,7 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
             candidate.portal.call(store.pdf_jobs.join)
             assert candidate.get("/api/candidate/interview").json()["status"] == "completed"
             assert candidate.get(f"/api/admin/interviews/{first}/pdf").status_code == 401
-            assert candidate.get(f"/api/interviews/{first}/transcript").status_code == 403
+            assert candidate.get(f"/api/interviews/{first}/transcript").status_code == 404
             assert (
                 candidate.post(
                     f"/api/admin/interviews/{first}/pdf/regenerate", headers=candidate_headers
@@ -470,16 +510,14 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
 
         historical = admin.portal.call(legacy_record)
         assert admin.get(f"/api/admin/interviews/{historical}").status_code == 200
-        later = {
-            **payload,
-            "candidate_email": f"later-{uuid.uuid4().hex}@example.com",
-            "scheduled_start_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
-            "latest_start_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
-        }
-        second = admin.post("/api/admin/assignments", json=later, headers=headers)
-        assert second.status_code == 201
-        second_id = second.json()["id"]
-        old_token = invitations[-1][1]
+        second_id, _, old_token = asyncio.run(
+            existing_assignment(
+                admin_email,
+                version_id=uuid.UUID(version_id),
+                candidate_email=f"later-{uuid.uuid4().hex}@example.com",
+                start=datetime.now(UTC) + timedelta(minutes=5),
+            )
+        )
         assert (
             admin.post(f"/api/admin/assignments/{second_id}/resend", headers=headers).status_code
             == 200

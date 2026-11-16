@@ -10,4 +10,4 @@ def test_documented_runtime_prompts_match_loaded_files() -> None:
     for name in ("assigned_decision", "assigned_closing"):
         assert f"src/rehearse_ai/prompts/{name}.txt" in document
         assert load_prompt(name).strip()
-    assert "not selected by the assigned-interview HTTP path" in document
+    assert "cannot be selected through the invitation WebRTC entry" in document

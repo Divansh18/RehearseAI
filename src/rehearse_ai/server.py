@@ -38,7 +38,6 @@ from rehearse_ai.accounts_db import (
 )
 from rehearse_ai.assigned import (
     SESSION_COOKIE,
-    AssignmentInput,
     BlueprintContent,
     assignment_public,
     candidate_session,
@@ -193,7 +192,7 @@ def create_app(settings: Settings) -> FastAPI:
             "history.js",
             "theme.css",
             "assigned.js",
-            "admin_setup.js",
+            "assignments.js",
         }:
             raise HTTPException(404)
         path = WEB_DIR / name
@@ -211,15 +210,6 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/reset-password")
     async def account_page() -> HTMLResponse:
         return page("account.html")
-
-    @app.get("/dashboard")
-    async def dashboard(request: Request, db: Db) -> Response:
-        await require_admin(request, db)
-        return RedirectResponse("/admin/interviews", status_code=303)
-
-    @app.get("/interviews/{record_id}")
-    async def candidate_detail(record_id: uuid.UUID, request: Request, db: Db) -> Response:
-        raise HTTPException(404)
 
     @app.get("/admin/interviews")
     async def admin_page(request: Request, db: Db) -> Response:
@@ -386,103 +376,18 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(403, "Administrator access required")
         return user
 
-    @app.get("/admin/blueprints")
-    async def blueprint_page(request: Request, db: Db) -> Response:
-        await require_admin(request, db)
-        return page("blueprints.html")
-
     @app.get("/admin/assignments")
     async def assignment_page(request: Request, db: Db) -> Response:
         await require_admin(request, db)
         return page("assignments.html")
 
-    @app.get("/api/admin/blueprints")
-    async def list_blueprints(request: Request, db: Db) -> list[dict]:
+    @app.get("/api/admin/blueprint-versions/{version_id}")
+    async def blueprint_version_detail(version_id: uuid.UUID, request: Request, db: Db) -> dict:
         await require_admin(request, db)
-        drafts = (
-            await db.scalars(
-                select(InterviewBlueprint).order_by(InterviewBlueprint.updated_at.desc()).limit(100)
-            )
-        ).all()
-        return [
-            {"id": str(item.id), "draft": item.draft, "updated_at": item.updated_at.isoformat()}
-            for item in drafts
-        ]
-
-    @app.post("/api/admin/blueprints", status_code=201)
-    async def create_blueprint(content: BlueprintContent, request: Request, db: Db) -> dict:
-        admin = await require_admin(request, db)
-        accounts.check_csrf(request)
-        item = InterviewBlueprint(
-            id=uuid.uuid4(),
-            created_by=admin.id,
-            draft=content.model_dump(),
-            created_at=now(),
-            updated_at=now(),
-        )
-        async with db_sessions.begin() as transaction:
-            transaction.add(item)
-        return {"id": str(item.id), "draft": item.draft}
-
-    @app.put("/api/admin/blueprints/{blueprint_id}")
-    async def edit_blueprint(
-        blueprint_id: uuid.UUID, content: BlueprintContent, request: Request, db: Db
-    ) -> dict:
-        await require_admin(request, db)
-        accounts.check_csrf(request)
-        async with db_sessions.begin() as transaction:
-            item = await transaction.get(InterviewBlueprint, blueprint_id, with_for_update=True)
-            if item is None:
-                raise HTTPException(404, "Blueprint not found")
-            item.draft = content.model_dump()
-            item.updated_at = now()
-        return {"id": str(blueprint_id), "draft": content.model_dump()}
-
-    @app.post("/api/admin/blueprints/{blueprint_id}/publish")
-    async def publish_blueprint(blueprint_id: uuid.UUID, request: Request, db: Db) -> dict:
-        await require_admin(request, db)
-        accounts.check_csrf(request)
-        async with db_sessions.begin() as transaction:
-            draft = await transaction.get(InterviewBlueprint, blueprint_id, with_for_update=True)
-            if draft is None:
-                raise HTTPException(404, "Blueprint not found")
-            content = BlueprintContent.model_validate(draft.draft)
-            last = await transaction.scalar(
-                select(func.max(BlueprintVersion.version)).where(
-                    BlueprintVersion.blueprint_id == blueprint_id
-                )
-            )
-            published = BlueprintVersion(
-                blueprint_id=blueprint_id,
-                version=(last or 0) + 1,
-                content=content.model_dump(),
-                published_at=now(),
-            )
-            transaction.add(published)
-        return {
-            "id": str(published.id),
-            "blueprint_id": str(blueprint_id),
-            "version": published.version,
-            "content": published.content,
-        }
-
-    @app.get("/api/admin/blueprint-versions")
-    async def list_blueprint_versions(request: Request, db: Db) -> list[dict]:
-        await require_admin(request, db)
-        versions = (
-            await db.scalars(
-                select(BlueprintVersion).order_by(BlueprintVersion.published_at.desc()).limit(100)
-            )
-        ).all()
-        return [
-            {
-                "id": str(item.id),
-                "blueprint_id": str(item.blueprint_id),
-                "version": item.version,
-                "content": item.content,
-            }
-            for item in versions
-        ]
+        item = await db.get(BlueprintVersion, version_id)
+        if item is None:
+            raise HTTPException(404, "Plan version not found")
+        return {"id": str(item.id), "version": item.version, "content": item.content}
 
     async def mail_assignment(assignment_id: uuid.UUID, *, actor_id: uuid.UUID, action: str) -> str:
         # Rotate the one-way digest on each send. A failed send is visible and retryable.
@@ -544,47 +449,6 @@ def create_app(settings: Settings) -> FastAPI:
                 )
         return status
 
-    @app.post("/api/admin/assignments", status_code=201)
-    async def create_assignment(payload: AssignmentInput, request: Request, db: Db) -> dict:
-        admin = await require_admin(request, db)
-        accounts.check_csrf(request)
-        version = await db.get(BlueprintVersion, payload.blueprint_version_id)
-        if version is None:
-            raise HTTPException(404, "Published blueprint not found")
-        if payload.latest_start_at.astimezone(UTC) <= now():
-            raise HTTPException(400, "The joining window must end in the future")
-        item = InterviewAssignment(
-            id=uuid.uuid4(),
-            blueprint_version_id=version.id,
-            candidate_email=str(payload.candidate_email).strip().casefold(),
-            candidate_name=payload.candidate_name.strip() if payload.candidate_name else None,
-            adjustments={"focus_areas": payload.focus_areas},
-            candidate_instructions=payload.candidate_instructions,
-            scheduled_start_at=payload.scheduled_start_at.astimezone(UTC),
-            latest_start_at=payload.latest_start_at.astimezone(UTC),
-            timezone=payload.timezone,
-            status="assigned",
-            invitation_digest=token_digest(invitation_token()),
-            invitation_expires_at=payload.latest_start_at.astimezone(UTC),
-            mail_status="pending",
-            created_at=now(),
-            updated_at=now(),
-        )
-        async with db_sessions.begin() as transaction:
-            transaction.add(item)
-            await transaction.flush()
-            transaction.add(
-                AssignmentAudit(
-                    assignment_id=item.id,
-                    actor_id=admin.id,
-                    action="created",
-                    occurred_at=now(),
-                    detail={"version_id": str(version.id)},
-                )
-            )
-        mail_status = await mail_assignment(item.id, actor_id=admin.id, action="invite_sent")
-        return {"id": str(item.id), "status": item.status, "mail_status": mail_status}
-
     @app.get("/api/admin/assignments")
     async def list_assignments(request: Request, db: Db) -> list[dict]:
         await require_admin(request, db)
@@ -634,53 +498,6 @@ def create_app(settings: Settings) -> FastAPI:
             "status": item.status,
             "mail_status": item.mail_status,
         }
-
-    @app.put("/api/admin/assignments/{assignment_id}")
-    async def edit_assignment(
-        assignment_id: uuid.UUID, payload: AssignmentInput, request: Request, db: Db
-    ) -> dict:
-        admin = await require_admin(request, db)
-        accounts.check_csrf(request)
-        if payload.latest_start_at.astimezone(UTC) <= now():
-            raise HTTPException(400, "The joining window must end in the future")
-        async with db_sessions.begin() as transaction:
-            item = await transaction.get(InterviewAssignment, assignment_id, with_for_update=True)
-            if item is None or item.status != "assigned":
-                raise HTTPException(409, "Assignment cannot be changed after it starts")
-            version = await transaction.get(BlueprintVersion, payload.blueprint_version_id)
-            if version is None:
-                raise HTTPException(404, "Published blueprint not found")
-            item.blueprint_version_id = version.id
-            item.candidate_email = str(payload.candidate_email).strip().casefold()
-            item.candidate_name = payload.candidate_name.strip() if payload.candidate_name else None
-            item.adjustments = {"focus_areas": payload.focus_areas}
-            item.candidate_instructions = payload.candidate_instructions
-            item.scheduled_start_at = payload.scheduled_start_at.astimezone(UTC)
-            item.latest_start_at = payload.latest_start_at.astimezone(UTC)
-            item.timezone = payload.timezone
-            item.mail_status = "pending"
-            item.updated_at = now()
-            previous_sessions = await transaction.scalars(
-                select(CandidateInterviewSession).where(
-                    CandidateInterviewSession.assignment_id == assignment_id,
-                    CandidateInterviewSession.revoked_at.is_(None),
-                )
-            )
-            for previous in previous_sessions:
-                previous.revoked_at = now()
-            transaction.add(
-                AssignmentAudit(
-                    assignment_id=assignment_id,
-                    actor_id=admin.id,
-                    action="edited",
-                    occurred_at=now(),
-                    detail={"version_id": str(version.id)},
-                )
-            )
-        mail_status = await mail_assignment(
-            assignment_id, actor_id=admin.id, action="invitation_updated"
-        )
-        return {"id": str(assignment_id), "status": "assigned", "mail_status": mail_status}
 
     @app.post("/api/admin/assignments/{assignment_id}/cancel")
     async def cancel_assignment(assignment_id: uuid.UUID, request: Request, db: Db) -> dict:
@@ -817,12 +634,6 @@ def create_app(settings: Settings) -> FastAPI:
             for entry in entries
         ]
 
-    @app.get("/api/interviews")
-    async def candidate_records(
-        request: Request, db: Db, page_number: int = Query(1, ge=1)
-    ) -> dict:
-        raise HTTPException(403, "Candidate history is unavailable")
-
     @app.get("/api/admin/interviews")
     async def admin_records(
         request: Request,
@@ -840,10 +651,6 @@ def create_app(settings: Settings) -> FastAPI:
             admin=True,
         )
 
-    @app.get("/api/interviews/{record_id}")
-    async def candidate_record(record_id: uuid.UUID, request: Request, db: Db) -> dict:
-        raise HTTPException(403, "Candidate history is unavailable")
-
     @app.get("/api/admin/interviews/{record_id}")
     async def admin_record(record_id: uuid.UUID, request: Request, db: Db) -> dict:
         user = await require_admin(request, db)
@@ -855,10 +662,6 @@ def create_app(settings: Settings) -> FastAPI:
             candidate = await db.get(Candidate, record.candidate_id)
             address = candidate.email
         return record_data(record, address, admin=True)
-
-    @app.get("/api/interviews/{record_id}/transcript")
-    async def candidate_transcript(record_id: uuid.UUID, request: Request, db: Db) -> list[dict]:
-        raise HTTPException(403, "Candidate history is unavailable")
 
     @app.get("/api/admin/interviews/{record_id}/transcript")
     async def admin_transcript(record_id: uuid.UUID, request: Request, db: Db) -> list[dict]:

@@ -67,7 +67,7 @@ def change_timestamp(model, key, value, field):
 def test_admin_login_expiry_logout_and_protected_routes(admin_client):
     client, headers, email, _ = admin_client
     assert client.get("/", follow_redirects=False).headers["location"] == "/login?reason=required"
-    assert client.get("/admin/blueprints").status_code == 401
+    assert client.get("/admin/assignments").status_code == 401
     assert client.get("/interview").status_code == 401
     assert client.get("/api/admin/interviews").status_code == 401
     assert post(client, headers, "/api/offer", type="offer", sdp="synthetic").status_code == 401
@@ -80,10 +80,8 @@ def test_admin_login_expiry_logout_and_protected_routes(admin_client):
     assert "httponly" in cookie and "samesite=lax" in cookie and "max-age=43200" in cookie
     assert "secure" not in cookie
     assert client.get("/api/auth/me").json()["role"] == "admin"
-    assert client.get("/admin/blueprints").status_code == 200
-    assert (
-        client.get("/dashboard", follow_redirects=False).headers["location"] == "/admin/interviews"
-    )
+    assert client.get("/admin/assignments").status_code == 200
+    assert client.get("/dashboard").status_code == 404
     assert client.get("/interview").status_code == 401
     token = client.cookies["rehearse_session"]
     change_timestamp(
