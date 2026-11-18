@@ -1,13 +1,14 @@
 <!doctype html>
 <html lang="en"><head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer"><title>RehearseAI — Existing assignments</title>
+  <meta name="referrer" content="no-referrer"><title>RehearseAI — Assignments</title>
   <link rel="stylesheet" href="/assets/theme.css?v=__BUILD_ID__">
   <link rel="stylesheet" href="/assets/account.css?v=__BUILD_ID__">
 </head><body><main class="dashboard-shell">
   <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div>
-    <nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews">Records</a><a href="/admin/assignments" aria-current="page">Assignments</a></div><button id="logout" class="secondary" type="button">Log out</button></nav></header>
-  <div class="dashboard-title"><div><span class="eyebrow">Private invitations</span><h1>Existing assignments</h1><p>New interview scheduling is being updated.</p></div></div>
+    <nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews">Records</a><a href="/admin/assignments" aria-current="page">Assignments</a><a href="/admin/schedule">Schedule interview</a></div><button id="logout" class="secondary" type="button">Log out</button></nav></header>
+  <div class="dashboard-title"><div><span class="eyebrow">Private invitations</span><h1>Assignments</h1><p>Each scheduled interview, its question plan and its invitation. Review and changes are optional.</p></div><a class="primary" href="/admin/schedule">Schedule interview</a></div>
+  <p id="notice" class="notice" role="status" hidden></p>
   <p id="message" role="alert" hidden></p>
-  <section class="account-card"><h2>Assigned interviews</h2><p class="muted">Review existing invitations. Unstarted assignments can be cancelled or resent.</p><div id="assignment-list" class="record-list"></div></section>
+  <section class="account-card"><h2>Scheduled interviews</h2><p class="muted">Questions are prepared automatically. An interview cannot begin until its plan is ready.</p><div id="assignment-list" class="record-list" aria-live="polite"></div></section>
 </main><script src="/assets/assignments.js?v=__BUILD_ID__" defer></script></body></html>

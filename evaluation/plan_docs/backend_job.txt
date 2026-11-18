@@ -1,0 +1,15 @@
+Senior Backend Engineer, Payments Platform
+
+We are looking for a senior backend engineer to help evolve our payments platform, which moves money for several thousand merchants. You will design and own services that must be correct, observable and easy to operate.
+
+Responsibilities
+- Design and build reliable, idempotent APIs and asynchronous workflows
+- Improve data modelling and performance in PostgreSQL
+- Lead incident response and drive post-incident improvements
+- Mentor engineers and review designs across the team
+
+Requirements
+- Five or more years building production backend services
+- Strong experience with distributed systems, message queues and relational databases
+- A track record of improving reliability and observability
+- Clear written and spoken communication

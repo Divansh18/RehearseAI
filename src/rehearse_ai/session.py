@@ -7,6 +7,14 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from rehearse_ai.browser_events import candidate_event
+from rehearse_ai.budget import (
+    ActiveClock,
+    RemainingQuestion,
+    pressure,
+    question_seconds,
+    skip_for_time,
+)
 from rehearse_ai.interview import (
     QUESTIONS,
     InterviewController,
@@ -21,15 +29,34 @@ from rehearse_ai.interview import (
 from rehearse_ai.memory import FACT_FIELDS, FactField
 from rehearse_ai.session_log import SessionLog
 
+# The opening is one exchange: greeting, the candidate's reply, a short acknowledgement and a
+# transition. If the candidate says nothing it moves on after this wait. The whole opening is
+# counted in active time, and its length is reported with the interview's coverage summary.
+# Interruption: audio that played for less than this was not meaningfully heard. This is measured
+# on the server at the transport output; it approximates, and is not, what the browser played.
+HEARD_MIN_SECS = 1.5
+HEARD_MIN_FRACTION = 0.5
+WORDS_PER_SECOND = 2.6
+# Short floor-control phrases ("go on", "yes please cut") are not answers.
+_FLOOR_CONTROL = re.compile(
+    r"^(?:(?:yes|yeah|yep|okay|ok|sure|sorry|please|thanks|thank you|go on|go ahead|continue|"
+    r"carry on|hold on|wait|one second|just a second|never mind|cut|cut in|cut it)[,.!?\s]*){1,5}$",
+    re.I,
+)
+OPENING_REPLY_WAIT_SECS = 12.0
+OPENING_ACK_TIMEOUT_SECS = 4.0
+_OPENING_KINDS = {UtteranceKind.GREETING, UtteranceKind.OPENING_ACK}
+_NAME_TOKEN = re.compile(r"[^\W\d_][^\W\d_'’.\-]*(?:['’.\-][^\W\d_]+)*")
+
 Infer = Callable[[str, dict[str, Any]], Awaitable[Mapping[str, Any]]]
 Speak = Callable[[Utterance], Awaitable[None]]
 Publish = Callable[[dict[str, Any]], None]
 CancelAudio = Callable[[], Awaitable[None]]
 
 _REPEAT = re.compile(
-    r"^(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?"
+    r"^(?:(?:sorry|pardon|excuse me),?\s+)?(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?"
     r"(?:repeat(?: that| the (?:question|last question))?"
-    r"|say (?:that|the question) again)\??[.!]?$",
+    r"|say (?:that|the question) again)(?:\s+one more time)?\??[.!]?$",
     re.IGNORECASE,
 )
 _SKIP = re.compile(r"^(?:please\s+)?(?:skip(?: this question)?|next question)\??[.!]?$", re.I)
@@ -391,8 +418,31 @@ class InterviewSession:
         build_id: str | None = None,
         interview_plan: dict[str, Any] | None = None,
         self_reported_name: str | None = None,
+        clock: Callable[[], float] | None = None,
+        opening: bool = True,
+        opening_wait_secs: float = OPENING_REPLY_WAIT_SECS,
     ) -> None:
         self._assigned_plan = interview_plan
+        self._now = clock or time.monotonic
+        self._clock = ActiveClock(self._now)
+        self._marks: dict[str, float] = {}
+        self._output_started_at: dict[int, float] = {}
+        self._closing_replays = 0
+        self._opening = bool(opening and interview_plan)
+        self._opening_wait_secs = opening_wait_secs
+        self._opening_task: asyncio.Task[None] | None = None
+        self._opening_seconds: int | None = None
+        self._greeting = self._greeting_for(self_reported_name)
+        self._target_seconds = (
+            int(interview_plan.get("target_minutes", 0)) * 60 if interview_plan else 0
+        )
+        self._question_seconds = (
+            question_seconds(interview_plan["questions"], self._target_seconds)
+            if interview_plan and self._target_seconds
+            else []
+        )
+        self._ended_for_time = False
+        self._coverage_recorded = False
         plan_questions = interview_plan["questions"] if interview_plan else None
         self.controller = InterviewController(
             tuple(item["question"] for item in plan_questions) if plan_questions else None,
@@ -402,9 +452,14 @@ class InterviewSession:
             required=tuple(item["required"] for item in plan_questions) if plan_questions else None,
         )
         if self_reported_name:
-            self.controller.remember_name(
-                self_reported_name, supplied_wording=self_reported_name, confirmed=True
-            )
+            try:
+                self.controller.remember_name(
+                    self_reported_name, supplied_wording=self_reported_name, confirmed=True
+                )
+            except ValueError:
+                # A real name such as "Anne-Marie O'Neil" is not "short plain text" to the memory
+                # rules. It must not abort the interview; it is simply not stored as a fact.
+                pass
         self.log = log
         self._infer = infer
         self._speak = speak
@@ -463,6 +518,8 @@ class InterviewSession:
         ):
             return
         self._media_paused = True
+        self._cancel_opening_timer()
+        self._clock.pause()
         self._generation += 1
         task = self._response_task
         if task and not task.done():
@@ -501,7 +558,10 @@ class InterviewSession:
         if self._closed or not self._media_paused:
             return
         self._media_paused = False
+        self._clock.resume()
         self._record("media_resumed", speaker=None)
+        if self.controller.stage is Stage.AWAITING_GREETING:
+            self._arm_opening_timer()
         if self.controller.interrupted_utterance is not None:
             await self._queue_speech(self.controller.retry_interrupted())
         elif self.controller.stage in {
@@ -511,17 +571,210 @@ class InterviewSession:
         }:
             self._start_response()
 
+    @staticmethod
+    def _greeting_for(self_reported_name: str | None) -> str:
+        """Greet by the name the candidate confirmed. It is data in a template, never a prompt."""
+        first = ""
+        if self_reported_name:
+            token = self_reported_name.split()[0] if self_reported_name.split() else ""
+            match = _NAME_TOKEN.fullmatch(token)
+            if match and len(token) <= 30:
+                first = token
+        return f"Hi {first}, how's your day going?" if first else "Hi, how's your day going?"
+
+    def _cancel_opening_timer(self) -> None:
+        task, self._opening_task = self._opening_task, None
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+
+    def _arm_opening_timer(self) -> None:
+        self._cancel_opening_timer()
+        if self._opening_wait_secs > 0 and not self._closed:
+            self._opening_task = asyncio.create_task(self._opening_timeout())
+
+    async def _opening_timeout(self) -> None:
+        try:
+            await asyncio.sleep(self._opening_wait_secs)
+        except asyncio.CancelledError:
+            return
+        if (
+            self._closed
+            or self._media_paused
+            or self._stop_latched
+            or self.controller.stage is not Stage.AWAITING_GREETING
+        ):
+            return
+        self._record("opening_reply_timeout", speaker=None)
+        await self._queue_speech(
+            self.controller.prepare_opening_transition("Whenever you're ready, let's get started.")
+        )
+
+    async def _route_assigned_opening(self, answer: str, interrupted: Utterance | None) -> None:
+        """Candidate speech during the opening. It can never become an interview answer."""
+        controller = self.controller
+        if interrupted is not None and interrupted.kind is UtteranceKind.OPENING_ACK:
+            # They spoke over the acknowledgement: nothing is lost by moving straight on.
+            if answer and controller.accept_barge_in_answer(answer):
+                self._interrupted_output_id = None
+                await self._queue_speech(controller.begin_question_one())
+            else:
+                await self._queue_speech(controller.retry_interrupted())
+            return
+        if interrupted is not None and interrupted.kind is UtteranceKind.GREETING:
+            if not answer:
+                await self._queue_speech(controller.retry_interrupted())
+                return
+            # Talking over the greeting is a reply to it, however early it began.
+            controller.accept_barge_in_answer(answer)
+            self._interrupted_output_id = None
+        elif controller.stage is Stage.AWAITING_OPENING_ACK:
+            if answer:
+                controller.add_greeting_continuation(answer)
+        elif controller.stage is Stage.AWAITING_GREETING:
+            if not answer:
+                self._arm_opening_timer()
+                return
+            if _is_sentence_request(_REPEAT, answer):
+                try:
+                    await self._queue_speech(controller.request_opening_repeat())
+                    return
+                except LimitReached:
+                    self._record("opening_repeat_limit", speaker=None, opening_phase="greeting")
+            controller.submit_greeting(answer)
+        else:
+            return
+        if _classify_greeting_readiness(answer) is Readiness.READY:
+            await self._queue_speech(
+                controller.prepare_opening_transition("Great, let's get started.")
+            )
+            return
+        self._start_response()
+
+    async def _respond_opening_ack(self, generation: int) -> None:
+        """One short, natural acknowledgement of the greeting reply, then the transition."""
+        reply = self.controller.greeting_response
+        self._record(
+            "inference_started",
+            speaker=None,
+            generation=generation,
+            purpose="opening_ack",
+            llm_first_token_ms=None,
+        )
+        ack = ""
+        try:
+            self._mark("decision_start")
+            result = await asyncio.wait_for(
+                self._infer("opening_ack", {"greeting_response": reply}), OPENING_ACK_TIMEOUT_SECS
+            )
+            self._mark("decision_done")
+            ack = str(result.get("text", "")).strip()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._record(
+                "response_error",
+                speaker=None,
+                generation=generation,
+                error_type=type(exc).__name__,
+                failure_stage="opening_inference",
+            )
+        if (
+            not ack
+            or len(ack) > 160
+            or "?" in ack
+            or re.search(
+                r"\b(?:strength|weakness|score|feedback|improve|coach|great job)\b", ack, re.I
+            )
+        ):
+            ack = _fallback_opening_ack(reply)
+        if generation != self._generation or self._closed or self._media_paused:
+            self._record("inference_stale_discarded", speaker=None, generation=generation)
+            return
+        self._record(
+            "inference_completed",
+            speaker=None,
+            generation=generation,
+            purpose="opening_ack",
+            validated=True,
+        )
+        await self._queue_speech(
+            self.controller.prepare_opening_transition(f"{ack} Let's get started.")
+        )
+
+    def _mark(self, name: str, *, first: bool = False) -> None:
+        if not first or name not in self._marks:
+            self._marks[name] = self._now()
+
+    def _record_response_latency(self, utterance: Utterance) -> None:
+        """Server-side breakdown of one response, from the end of the candidate's speech.
+
+        Every value is a difference between two server monotonic readings. ``output_started`` is
+        Pipecat's transport output, not browser playback; ``vad_stop`` is a Silero estimate of
+        the end of speech, not the last audible phoneme. Stages that were not observed are None.
+        """
+        marks, turn_end = self._marks, self._marks.get("turn_complete")
+        if turn_end is None:
+            return
+
+        def gap(later: str, earlier: str) -> int | None:
+            if later in marks and earlier in marks:
+                return round((marks[later] - marks[earlier]) * 1000)
+            return None
+
+        self._record(
+            "response_latency",
+            speaker=None,
+            utterance_id=utterance.id,
+            utterance_kind=utterance.kind.name.lower(),
+            stt_final_after_speech_end_ms=gap("last_stt", "vad_stop"),
+            speech_end_to_turn_complete_ms=gap("turn_complete", "vad_stop"),
+            last_stt_to_turn_complete_ms=gap("turn_complete", "last_stt"),
+            turn_complete_to_model_start_ms=gap("decision_start", "turn_complete"),
+            model_ms=gap("decision_done", "decision_start"),
+            model_done_to_prepared_ms=gap("prepared", "decision_done"),
+            prepared_to_tts_first_audio_ms=gap("first_audio", "prepared"),
+            tts_first_audio_to_output_started_ms=gap("output_started", "first_audio"),
+            turn_complete_to_output_started_ms=gap("output_started", "turn_complete"),
+            speech_end_to_output_started_ms=gap("output_started", "vad_stop"),
+            basis=(
+                "server monotonic clock; output_started is server transport output, not browser "
+                "playback; vad_stop is an estimate of the end of speech"
+            ),
+        )
+        for name in ("turn_complete", "decision_start", "decision_done", "prepared", "first_audio"):
+            marks.pop(name, None)
+
+    def _heard_enough(self, utterance: Utterance, heard_secs: float) -> bool:
+        """Did the candidate plausibly hear enough of this to respond to it?"""
+        expected = max(0.5, len(utterance.text.split()) / WORDS_PER_SECOND)
+        return heard_secs >= min(HEARD_MIN_SECS, HEARD_MIN_FRACTION * expected)
+
+    async def _finish_interrupted_closing(self, interrupted: Utterance) -> None:
+        """Speech over a closing: replay it once if barely heard, otherwise end without resuming."""
+        heard = self._interrupted_output_id == interrupted.id
+        if not heard and self._closing_replays < 1:
+            self._closing_replays += 1
+            self._record("closing_replayed_after_early_interruption", speaker=None)
+            await self._queue_speech(self.controller.retry_interrupted())
+            return
+        stage = self.controller.finish_after_interrupted_closing()
+        self._record("closing_interrupted_not_resumed", speaker=None, heard=heard)
+        if stage is Stage.ENDED_EARLY:
+            self._record_coverage("ended_early")
+            self._record("interview_ended_early", speaker=None)
+        else:
+            self._record_coverage("time_budget" if self._ended_for_time else "completed")
+            self._record("interview_complete", speaker=None)
+
     def _record(self, event: str, **details: Any) -> None:
         entry = self.log.record(event, **details)
-        self._publish({"type": "rehearseai", "event": entry})
+        # The log is internal evidence. Only allowlisted, minimal payloads reach the browser.
+        visible = candidate_event(entry)
+        if visible is not None:
+            self._publish({"type": "rehearseai", "event": visible})
         if self.log.persistence_failed:
             self.log.persistence_failed = False
-            self._publish(
-                {
-                    "type": "rehearseai",
-                    "event": {"event": "persistence_error", "session_id": self.log.session_id},
-                }
-            )
+            self._publish({"type": "rehearseai", "event": {"event": "persistence_error"}})
 
     def _remember_spoken_name(self, name: str, wording: str) -> None:
         previous = self.controller.memory.get("candidate_name")
@@ -773,6 +1026,8 @@ class InterviewSession:
         return ""
 
     def turn_signal(self, signal: str, **details: Any) -> None:
+        if signal == "vad_stopped":
+            self._marks["vad_stop"] = self._now()
         if not self._closed:
             self._record(signal, speaker="candidate", turn_number=self._turn_number, **details)
 
@@ -783,19 +1038,39 @@ class InterviewSession:
         frame_timestamp: str,
         finalized: bool,
         frame_id: int,
-        pre_start: bool = False,
+        correlation: str = "active_turn",
+        boundary_frame_id: int | None = None,
+        **provider_details: Any,
     ) -> None:
         if not self._closed:
+            self._marks["last_stt"] = self._now()
             self._record(
                 "stt_final_segment",
                 speaker="candidate",
                 text=text,
-                turn_number=self._turn_number + int(pre_start),
-                turn_correlation="pre_start_segment" if pre_start else "active_turn",
+                # As in earlier logs, a pre-start segment is numbered with the next turn.
+                turn_number=self._turn_number + int(correlation == "pre_start_segment"),
+                turn_correlation=correlation,
+                boundary_frame_id=boundary_frame_id,
                 frame_timestamp=frame_timestamp,
                 finalized=finalized,
                 frame_id=frame_id,
+                **provider_details,
             )
+
+    async def late_transcript(self, text: str, *, boundary_frame_id: int) -> None:
+        """A transcript created before a boundary reached us after the turn was already routed.
+
+        It is the candidate's speech from that turn, so it is processed now as a continuation
+        rather than waiting for an unrelated later boundary.
+        """
+        if self._closed or self._media_paused:
+            return
+        self._record(
+            "late_transcript_continuation", speaker=None, boundary_frame_id=boundary_frame_id
+        )
+        await self.user_started()
+        await self.user_stopped(text, segment_count=1, boundary_frame_id=boundary_frame_id)
 
     async def detect_stop_from_segments(self, text: str) -> bool:
         if (
@@ -818,8 +1093,9 @@ class InterviewSession:
     async def start(self) -> None:
         if self._closed or self._media_paused or self.controller.stage is not Stage.NEW:
             return
+        self._clock.start()
         self._record("session_started", speaker=None, build_id=self._build_id)
-        await self._queue_speech(self.controller.start())
+        await self._queue_speech(self.controller.start(self._greeting if self._opening else None))
 
     async def _queue_speech(self, utterance: Utterance) -> None:
         if (
@@ -829,7 +1105,15 @@ class InterviewSession:
             or (self._stop_latched and utterance.kind is not UtteranceKind.EARLY_FEEDBACK)
         ):
             return
+        if (
+            utterance.kind is UtteranceKind.QUESTION
+            and self._opening_seconds is None
+            and self._opening
+        ):
+            # The opening ends when question one is first queued; it counts as active time.
+            self._opening_seconds = round(self._clock.active_seconds())
         self._active_prompt_id = utterance.id
+        self._mark("prepared", first=True)
         self._record(
             "agent_prepared",
             speaker="agent",
@@ -863,6 +1147,8 @@ class InterviewSession:
             or self.controller.stage in {Stage.COMPLETE, Stage.ENDED_EARLY}
         ):
             return
+        self._cancel_opening_timer()
+        self._marks.clear()
         self._generation += 1
         task = self._response_task
         if task and not task.done():
@@ -873,10 +1159,19 @@ class InterviewSession:
         self._response_task = None
         pending = self.controller.pending
         if pending is not None and self.controller.interrupt(pending.id):
-            self._interrupted_output_id = (
-                pending.id if pending.id in self._output_started_ids else None
+            output_started = pending.id in self._output_started_ids
+            started_at = self._output_started_at.get(pending.id)
+            heard_secs = (self._now() - started_at) if (output_started and started_at) else 0.0
+            # The assigned interview needs a minimum amount of audio before speech counts as a
+            # reply to it. Historical practice sessions keep "audio started means heard".
+            heard_enough = output_started and (
+                self._assigned_plan is None
+                or pending.kind in _OPENING_KINDS
+                or self._heard_enough(pending, heard_secs)
             )
-            if self._interrupted_output_id is not None:
+            # "Heard" drives how the reply is routed; the stop debt tracks real audio output.
+            self._interrupted_output_id = pending.id if heard_enough else None
+            if output_started:
                 self._cancelled_output_stop_debt += 1
             self._speaking_id = None
             self._tts_contexts = {
@@ -890,7 +1185,9 @@ class InterviewSession:
                 utterance_id=pending.id,
                 text=pending.text,
                 interrupted=True,
-                output_started=self._interrupted_output_id is not None,
+                output_started=output_started,
+                heard_ms=round(heard_secs * 1000),
+                heard_enough=heard_enough,
                 cancellation_reason="candidate_speech_onset",
                 generation=self._generation - 1,
             )
@@ -924,6 +1221,7 @@ class InterviewSession:
             return
         answer = text.strip()
         self._last_turn_end = time.perf_counter()
+        self._mark("turn_complete")
         continuing = self.controller.stage in {
             Stage.AWAITING_OPENING_ACK,
             Stage.AWAITING_PROPOSAL,
@@ -1297,6 +1595,13 @@ class InterviewSession:
 
     async def _route_assigned_turn(self, answer: str) -> None:
         """Route one completed turn against the assigned, delivery-aware plan."""
+        closing = self.controller.interrupted_utterance
+        if closing is not None and closing.kind in {
+            UtteranceKind.CLOSING,
+            UtteranceKind.EARLY_FEEDBACK,
+        }:
+            await self._finish_interrupted_closing(closing)
+            return
         if self._stop_latched:
             if self.controller.stage is Stage.EARLY_CLOSING:
                 await self._queue_speech(
@@ -1306,6 +1611,11 @@ class InterviewSession:
                 )
             return
         interrupted = self.controller.interrupted_utterance
+        if self.controller.stage in {Stage.AWAITING_GREETING, Stage.AWAITING_OPENING_ACK} or (
+            interrupted is not None and interrupted.kind in _OPENING_KINDS
+        ):
+            await self._route_assigned_opening(answer, interrupted)
+            return
         if _FEEDBACK_REQUEST.search(answer):
             unheard = interrupted is not None and self._interrupted_output_id != interrupted.id
             await self._queue_speech(
@@ -1329,6 +1639,7 @@ class InterviewSession:
                     self._record("clarification_limit", speaker=None)
             return
         if _is_sentence_request(_SKIP, answer):
+            self._apply_time_budget()
             try:
                 next_prompt = (
                     self.controller.skip_interrupted()
@@ -1355,6 +1666,12 @@ class InterviewSession:
                 await self._queue_speech(self.controller.retry_interrupted())
                 return
             if self._interrupted_output_id != interrupted.id:
+                if _FLOOR_CONTROL.fullmatch(answer.strip()):
+                    # "Go on" / "yes please cut" over a prompt that was barely heard: replay it.
+                    # These words are neither an answer nor a reason to spend a probe.
+                    self._record("floor_control_replay", speaker=None, utterance_id=interrupted.id)
+                    await self._queue_speech(self.controller.retry_interrupted())
+                    return
                 if interrupted.kind is UtteranceKind.QUESTION:
                     await self._queue_speech(self.controller.resolve_unheard_question(answer))
                 elif interrupted.kind in {
@@ -1395,8 +1712,151 @@ class InterviewSession:
                 self._latest_candidate_turn = answer
                 self._start_response()
 
+    # --- Assigned-interview context, budget and response -------------------------------
+
+    @staticmethod
+    def _clip(text: str, limit: int) -> str:
+        text = " ".join(text.split())
+        return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+    def _remaining_for_budget(self) -> list[RemainingQuestion]:
+        plan = self._assigned_plan
+        if not plan:
+            return []
+        current = (self.controller.current_question_number or 0) - 1
+        covered = self.controller.covered_source_turns
+        skipped = set(self.controller.time_skipped_numbers)
+        return [
+            RemainingQuestion(
+                index, bool(item.get("required", True)), self._question_seconds[index]
+            )
+            for index, item in enumerate(plan["questions"])
+            if index > current and covered[index] is None and (index + 1) not in skipped
+        ]
+
+    def _time_pressure(self) -> str:
+        if not self._assigned_plan or not self._target_seconds:
+            return "normal"
+        return pressure(
+            self._clock.active_seconds(), self._target_seconds, self._remaining_for_budget()
+        )
+
+    def _apply_time_budget(self) -> str:
+        """Drop unaffordable questions at a turn boundary and return the time pressure."""
+        if not self._assigned_plan or not self._target_seconds:
+            return "normal"
+        active = self._clock.active_seconds()
+        remaining = self._remaining_for_budget()
+        state = pressure(active, self._target_seconds, remaining)
+        dropped = skip_for_time(active, self._target_seconds, remaining)
+        if dropped:
+            self.controller.mark_time_skipped(dropped)
+            self._record(
+                "questions_skipped_for_time",
+                speaker=None,
+                question_numbers=[index + 1 for index in dropped],
+                time_pressure=state,
+                active_seconds=round(active),
+                target_seconds=self._target_seconds,
+            )
+        if state == "exhausted":
+            self._ended_for_time = True
+        return state
+
+    def _record_coverage(self, end_reason: str) -> None:
+        """Persist, once, an honest number-only account of what was reached."""
+        if self._coverage_recorded or not self._assigned_plan:
+            return
+        self._coverage_recorded = True
+        self._record(
+            "coverage_summary",
+            speaker=None,
+            summary={
+                **self.controller.coverage_snapshot(),
+                "end_reason": end_reason,
+                "active_seconds": round(self._clock.active_seconds()),
+                "paused_seconds": round(self._clock.paused_seconds),
+                "target_seconds": self._target_seconds,
+                "ended_for_time": self._ended_for_time,
+                "opening_seconds": self._opening_seconds,
+            },
+        )
+
+    def _assigned_payload(self, *, closing: bool = False) -> dict[str, Any]:
+        """The bounded context a single assigned decision needs.
+
+        Deliberately excluded: the full plan, future question text and guidance,
+        grounding evidence and anything the admin supplied as private instructions.
+        Future questions appear only as short topic labels so earlier coverage can be
+        recognised. Candidate speech and memory remain untrusted data.
+        """
+        plan = self._assigned_plan or {}
+        questions = plan.get("questions", [])
+        number = self.controller.current_question_number
+        answers = self.controller.answers
+        covered = self.controller.covered_source_turns
+        skipped = set(self.controller.time_skipped_numbers)
+        context: dict[str, Any] = {
+            "title": plan.get("title", ""),
+            "purpose": plan.get("purpose", ""),
+            "interviewer_style": plan.get("interviewer_style", ""),
+        }
+        if closing:
+            context["closing_instructions"] = plan.get("closing_instructions", "")
+        current = None
+        if number and not closing:
+            item = questions[number - 1]
+            current = {
+                "question_number": number,
+                "of": len(questions),
+                "topic": item["topic"],
+                "question": item["question"],
+                "follow_up_guidance": item.get("follow_up_guidance", ""),
+                "required": bool(item.get("required", True)),
+            }
+        latest = self._latest_candidate_turn
+        before = list(self._answer_snapshot or ())
+        return {
+            "phase": "closing" if closing else "interview",
+            "interview_context": context,
+            "candidate_focus_areas": list(plan.get("candidate_focus_areas", []))[:8],
+            "current_question": current,
+            "remaining_topics": [
+                {"question_number": n, "topic": item["topic"]}
+                for n, item in enumerate(questions, 1)
+                if number is not None and n > number and covered[n - 1] is None and n not in skipped
+            ],
+            "prior_answers": [
+                {
+                    "question_number": n,
+                    "topic": questions[n - 1]["topic"],
+                    "answer": self._clip(" ".join(answers[n - 1]), 500),
+                }
+                for n in range(1, len(questions) + 1)
+                if n != number and answers[n - 1]
+            ],
+            "current_question_answer_before_latest_turn": self._clip(" ".join(before), 1200),
+            "latest_candidate_turn": self._clip(latest, 1200),
+            "session_memory": self.controller.memory.for_model(),
+            "correction_overlays": self.controller.memory.corrections_for_model(),
+            "last_delivered_prompt": (
+                self._last_delivered_prompt.text if self._last_delivered_prompt else None
+            ),
+            "interrupted_prompt": (
+                self.controller.interrupted_utterance.text
+                if self.controller.interrupted_utterance
+                else None
+            ),
+            "remaining_follow_ups": self.controller.remaining_follow_ups,
+            "time_pressure": self._time_pressure(),
+            "ended_for_time": self._ended_for_time,
+        }
+
     async def _respond_assigned(self, generation: int) -> None:
         if self._closed or self._media_paused or generation != self._generation:
+            return
+        if self.controller.stage is Stage.AWAITING_OPENING_ACK:
+            await self._respond_opening_ack(generation)
             return
         if self.controller.stage is Stage.AWAITING_FEEDBACK:
             # This stage is reused as a terminal closing gate; no feedback is generated.
@@ -1408,7 +1868,9 @@ class InterviewSession:
                 llm_first_token_ms=None,
             )
             try:
-                result = await self._infer("assigned_closing", self._payload())
+                self._mark("decision_start")
+                result = await self._infer("assigned_closing", self._assigned_payload(closing=True))
+                self._mark("decision_done")
                 text = result.get("text")
                 if (
                     not isinstance(text, str)
@@ -1443,6 +1905,22 @@ class InterviewSession:
             return
         if not self._latest_candidate_turn:
             return
+        state = self._apply_time_budget()
+        if state == "exhausted":
+            # The candidate's turn has finished; nothing is cut off. Move to the closing.
+            self._record(
+                "inference_skipped_budget_exhausted",
+                speaker=None,
+                generation=generation,
+                active_seconds=round(self._clock.active_seconds()),
+                target_seconds=self._target_seconds,
+            )
+            next_prompt = self.controller.propose(ReplyKind.ADVANCE)
+            if next_prompt:
+                await self._queue_speech(next_prompt)
+            else:
+                self._start_response()
+            return
         self._record(
             "inference_started",
             speaker=None,
@@ -1451,13 +1929,9 @@ class InterviewSession:
             llm_first_token_ms=None,
         )
         try:
-            result = await self._infer(
-                "assigned_decision",
-                {
-                    **self._payload(),
-                    "latest_candidate_turn": self._latest_candidate_turn,
-                },
-            )
+            self._mark("decision_start")
+            result = await self._infer("assigned_decision", self._assigned_payload())
+            self._mark("decision_done")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1474,14 +1948,26 @@ class InterviewSession:
             return
         action = str(result.get("action", "")).lower()
         speech = result.get("text", "")
+        # Internal record only. It is not marked validated until validation below succeeds.
         self._record(
             "decision_proposed",
             speaker=None,
             generation=generation,
             action=action,
             text=speech,
-            validated=True,
+            validated=False,
         )
+
+        def accept() -> None:
+            self._record(
+                "inference_completed",
+                speaker=None,
+                generation=generation,
+                purpose="assigned_decision",
+                validated=True,
+                action=action,
+            )
+
         if action in {"feedback_request", "off_topic", "coach_identity"}:
             if (
                 self.controller.stage is Stage.AWAITING_PROPOSAL
@@ -1499,28 +1985,46 @@ class InterviewSession:
                 ),
                 "coach_identity": "You can call me RehearseAI.",
             }[action]
+            accept()
             await self._queue_speech(self.controller.prepare_information(reply))
             return
         if action == "wait":
+            accept()
             self._record("awaiting_continuation", speaker=None, generation=generation)
             return
-        self._record(
-            "inference_completed",
-            speaker=None,
-            generation=generation,
-            purpose="assigned_decision",
-            validated=True,
-        )
-        if action in {"follow_up", "nudge"} and self.controller.remaining_follow_ups > 0:
-            if (
+        if action in {"follow_up", "nudge"}:
+            if state != "normal" or self.controller.remaining_follow_ups <= 0:
+                self._record(
+                    "decision_rejected",
+                    speaker=None,
+                    generation=generation,
+                    reason="probe_budget" if state != "normal" else "probe_limit",
+                    time_pressure=state,
+                )
+            elif (
                 isinstance(speech, str)
                 and speech.strip()
                 and len(speech) <= 300
                 and speech.count("?") <= 1
             ):
+                accept()
                 kind = ReplyKind.FOLLOW_UP if action == "follow_up" else ReplyKind.NUDGE
                 await self._queue_speech(self.controller.propose(kind, speech))
                 return
+            else:
+                self._record(
+                    "decision_rejected",
+                    speaker=None,
+                    generation=generation,
+                    reason="invalid_spoken_text",
+                )
+        elif action != "advance":
+            self._record(
+                "decision_rejected",
+                speaker=None,
+                generation=generation,
+                reason="unknown_action",
+            )
         if action == "advance":
             coverage = result.get("covered_future_questions", [])
             if isinstance(coverage, list):
@@ -1543,6 +2047,13 @@ class InterviewSession:
                             source_turn=self._turn_number,
                             evidence_quote=quote,
                         )
+            self._apply_time_budget()
+            accept()
+        else:
+            # Python advances because the proposal was rejected; the model's text is unused.
+            self._record(
+                "decision_fallback_advance", speaker=None, generation=generation, validated=False
+            )
         next_prompt = self.controller.propose(ReplyKind.ADVANCE)
         if next_prompt:
             await self._queue_speech(next_prompt)
@@ -1731,6 +2242,7 @@ class InterviewSession:
         if self._stop_latched:
             return
         self._stop_latched = True
+        self._cancel_opening_timer()
         self._end_reason = reason
         self._generation += 1
         task = self._response_task
@@ -1804,12 +2316,6 @@ class InterviewSession:
             Stage.AWAITING_NO_PROJECT_CHOICE: "no_project_choice",
         }.get(self.controller.stage, "interview")
         return {
-            "assigned_interview": self._assigned_plan,
-            "active_question_plan": (
-                self._assigned_plan["questions"][index - 1]
-                if self._assigned_plan and index
-                else None
-            ),
             "phase": phase,
             "current_question_number": self.controller.current_question_number,
             "current_question": self.controller.current_question,
@@ -2832,6 +3338,7 @@ class InterviewSession:
             and utterance_id not in self._first_audio_ids
         ):
             self._first_audio_ids.add(utterance_id)
+            self._mark("first_audio", first=True)
             self._record(
                 "tts_first_audio_generated",
                 speaker=None,
@@ -2881,6 +3388,8 @@ class InterviewSession:
             self._cancelled_output_stop_debt = 0
         self._speaking_id = pending.id
         self._output_started_ids.add(pending.id)
+        self._output_started_at[pending.id] = self._now()
+        self._mark("output_started")
         elapsed = (
             round((time.perf_counter() - self._last_turn_end) * 1000, 1)
             if self._last_turn_end is not None
@@ -2898,6 +3407,7 @@ class InterviewSession:
             ),
             browser_playback_onset_ms=None,
         )
+        self._record_response_latency(pending)
 
     def bot_stopped(self) -> None:
         if self._media_paused:
@@ -2935,9 +3445,13 @@ class InterviewSession:
                 delivery_basis="Pipecat BotStoppedSpeakingFrame at output transport",
                 browser_playback_confirmed=False,
             )
+            if pending.kind is UtteranceKind.GREETING and self._assigned_plan is not None:
+                self._arm_opening_timer()
             if self.controller.stage is Stage.COMPLETE:
+                self._record_coverage("time_budget" if self._ended_for_time else "completed")
                 self._record("interview_complete", speaker=None)
             elif self.controller.stage is Stage.ENDED_EARLY:
+                self._record_coverage("ended_early")
                 self._record("interview_ended_early", speaker=None)
             elif self.controller.stage is Stage.AWAITING_QUESTION_START:
                 next_question = self.controller.begin_question_one()
@@ -2967,6 +3481,7 @@ class InterviewSession:
         if self._closed:
             return
         self._closed = True
+        self._cancel_opening_timer()
         self._generation += 1
         pending = self.controller.pending
         if pending is not None:
@@ -2991,6 +3506,7 @@ class InterviewSession:
             end_kind = "pipeline_failed"
         else:
             end_kind = "disconnected_before_completion"
+        self._record_coverage(end_kind)
         self._record(
             "session_ended",
             speaker=None,

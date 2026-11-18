@@ -1,0 +1,347 @@
+{
+  "model": "gpt-4.1-mini",
+  "scenarios": {
+    "backend": {
+      "label": "Backend engineer",
+      "target_minutes": 30,
+      "seconds_to_generate": 7.2,
+      "assessment": {
+        "question_count": 6,
+        "allowed_range": [
+          4,
+          7
+        ],
+        "budget_total_seconds": 1530,
+        "budget_share_of_target": 0.85,
+        "resume_grounded": 5,
+        "evidence_verified": true,
+        "max_pairwise_similarity": 0.21,
+        "must_questions": 4,
+        "sensitive_terms_in_questions": []
+      },
+      "plan": {
+        "title": "Senior Backend Engineer interview",
+        "purpose": "Explore candidate's experience and skills in building reliable backend payment systems and their approach to ownership and observability.",
+        "questions": [
+          {
+            "topic": "Background and experience",
+            "question": "Can you describe your role and key responsibilities as a Staff Engineer at Northwind Payments?",
+            "required": true,
+            "follow_up_guidance": "Listen for details about system scale, challenges faced, and specific contributions.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 266,
+            "source": "resume",
+            "evidence_quote": "Led the redesign of the settlement ledger from a single Postgres database into an event-sourced service processing about 4 million transactions per day",
+            "basis": "Candidate's leadership in redesigning a core payment system aligns with senior backend engineer responsibilities."
+          },
+          {
+            "topic": "Idempotency and reliability",
+            "question": "You introduced idempotency keys across all write APIs at Northwind Payments. Can you explain why idempotency is important and how you implemented it?",
+            "required": true,
+            "follow_up_guidance": "Probe for technical approach, challenges, and impact on system reliability.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 299,
+            "source": "resume",
+            "evidence_quote": "Introduced idempotency keys across all write APIs, which removed a class of double-charge incidents",
+            "basis": "Directly relates to job requirement for designing reliable, idempotent APIs."
+          },
+          {
+            "topic": "Performance improvement",
+            "question": "What strategies did you use to reduce the p99 settlement latency from 2.4 seconds to 700 milliseconds?",
+            "required": true,
+            "follow_up_guidance": "Seek details on architectural changes, trade-offs, and monitoring methods.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 299,
+            "source": "resume",
+            "evidence_quote": "Reduced p99 settlement latency from 2.4 seconds to 700 milliseconds by moving reconciliation to batched consumers on Kafka",
+            "basis": "Performance tuning experience with asynchronous workflows and message queues is relevant to the role."
+          },
+          {
+            "topic": "Mentorship and team leadership",
+            "question": "How have you approached mentoring engineers and managing on-call rotations in your recent roles?",
+            "required": false,
+            "follow_up_guidance": "Explore mentoring style, incident handling, and team communication practices.",
+            "max_probes": 1,
+            "priority": "should",
+            "budget_seconds": 200,
+            "source": "resume",
+            "evidence_quote": "Mentored five engineers and ran the on-call rotation for a team of eight",
+            "basis": "Mentorship and incident response leadership are key responsibilities in the job description."
+          },
+          {
+            "topic": "Data modeling and database management",
+            "question": "Can you discuss your experience designing the database sharding strategy for the orders table at Brightloop Commerce?",
+            "required": false,
+            "follow_up_guidance": "Listen for reasoning behind sharding choices and impact on scalability and reliability.",
+            "max_probes": 1,
+            "priority": "should",
+            "budget_seconds": 200,
+            "source": "resume",
+            "evidence_quote": "Designed the database sharding strategy for the orders table",
+            "basis": "Relevant to improving data modeling and performance in PostgreSQL as required by the role."
+          },
+          {
+            "topic": "Observability and incident response",
+            "question": "What approaches have you used to improve observability and lead post-incident improvements in backend systems?",
+            "required": true,
+            "follow_up_guidance": "Probe for tools, metrics, communication, and learning from incidents.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 266,
+            "source": "job",
+            "evidence_quote": "",
+            "basis": "Observability and incident response are critical for the payments platform role."
+          }
+        ],
+        "focus_areas": [
+          "reliability",
+          "correctness",
+          "ownership",
+          "observability",
+          "mentorship"
+        ],
+        "target_minutes": 30,
+        "interviewer_style": "Calm, concise, and curious, encouraging detailed explanations and reflections without pressure.",
+        "closing_instructions": "Thank the candidate warmly for their time and insights, without mentioning next steps, feedback, or outcomes."
+      },
+      "revision": {
+        "request": "Replace the last question with one about handling disagreement with a colleague.",
+        "seconds": 6.0,
+        "assessment": {
+          "question_count": 6,
+          "allowed_range": [
+            4,
+            7
+          ],
+          "budget_total_seconds": 1530,
+          "budget_share_of_target": 0.85,
+          "resume_grounded": 5,
+          "evidence_verified": true,
+          "max_pairwise_similarity": 0.21,
+          "must_questions": 4,
+          "sensitive_terms_in_questions": []
+        },
+        "last_question_before": "What approaches have you used to improve observability and lead post-incident improvements in backend systems?",
+        "last_question_after": "Can you describe a time when you disagreed with a colleague on a technical decision? How did you handle the situation?",
+        "unchanged_questions": 5
+      }
+    },
+    "ai": {
+      "label": "AI engineer",
+      "target_minutes": 45,
+      "seconds_to_generate": 9.4,
+      "assessment": {
+        "question_count": 8,
+        "allowed_range": [
+          6,
+          10
+        ],
+        "budget_total_seconds": 2296,
+        "budget_share_of_target": 0.85,
+        "resume_grounded": 5,
+        "evidence_verified": true,
+        "max_pairwise_similarity": 0.21,
+        "must_questions": 5,
+        "sensitive_terms_in_questions": []
+      },
+      "plan": {
+        "title": "AI Engineer Interview",
+        "purpose": "Explore candidate's experience and skills in building and evaluating LLM-powered retrieval systems with a focus on quality and safety.",
+        "questions": [
+          {
+            "topic": "Background and Experience",
+            "question": "Can you describe your role and main responsibilities at Halcyon Health related to LLM-based retrieval systems?",
+            "required": true,
+            "follow_up_guidance": "Listen for specifics about system design, challenges faced, and their role in the project.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 359,
+            "source": "resume",
+            "evidence_quote": "Built a retrieval-augmented question answering system over internal clinical guidelines for nurses",
+            "basis": "Candidate's direct experience with retrieval-augmented systems relevant to job requirements."
+          },
+          {
+            "topic": "Evaluation and Quality Measurement",
+            "question": "How did you design and use the evaluation harness with 600 hand-labelled questions to measure system quality?",
+            "required": true,
+            "follow_up_guidance": "Probe for methods of evaluation, metrics used, and how results influenced improvements.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 359,
+            "source": "resume",
+            "evidence_quote": "Created an evaluation harness of 600 hand-labelled questions and used it to catch a regression",
+            "basis": "Candidate's experience in building evaluation systems aligns with job's quality measurement needs."
+          },
+          {
+            "topic": "Reducing Hallucinations and Failures",
+            "question": "You mentioned reducing unsupported answers from 14% to 3% by adding citation checks and a refusal path. Can you explain how you implemented these features?",
+            "required": true,
+            "follow_up_guidance": "Seek details on technical approach, challenges, and impact on user experience.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 359,
+            "source": "resume",
+            "evidence_quote": "Reduced unsupported answers from 14 percent to 3 percent by adding citation checks and a refusal path",
+            "basis": "Directly relevant to job focus on reducing hallucinations and safe failure handling."
+          },
+          {
+            "topic": "Prompt Engineering and Testing",
+            "question": "What approach did you take to run A/B tests on prompt changes and write team guidance on prompt versioning?",
+            "required": false,
+            "follow_up_guidance": "Ask about experimental design, interpretation of results, and documentation practices.",
+            "max_probes": 2,
+            "priority": "should",
+            "budget_seconds": 287,
+            "source": "resume",
+            "evidence_quote": "Ran A/B tests on prompt changes and wrote the team guidance on prompt versioning",
+            "basis": "Experience with prompt engineering and evaluation relevant to job responsibilities."
+          },
+          {
+            "topic": "Python and API Development",
+            "question": "Can you discuss your experience developing Python applications and APIs, particularly any work involving FastAPI or Docker?",
+            "required": false,
+            "follow_up_guidance": "Look for examples of projects, challenges, and how these tools were used effectively.",
+            "max_probes": 1,
+            "priority": "should",
+            "budget_seconds": 215,
+            "source": "resume",
+            "evidence_quote": "Python, PyTorch, vector databases, evaluation design, prompt engineering, FastAPI, Docker",
+            "basis": "Candidate's listed skills relevant to job's technical requirements."
+          },
+          {
+            "topic": "Experiment Design and Result Interpretation",
+            "question": "How do you approach designing experiments and interpreting results to improve LLM-powered features?",
+            "required": true,
+            "follow_up_guidance": "Encourage candidate to describe methodology, metrics, and decision-making processes.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 287,
+            "source": "job",
+            "evidence_quote": "",
+            "basis": "Key job requirement to design experiments and interpret results for feature improvement."
+          },
+          {
+            "topic": "Safety, Privacy, and Automation Judgment",
+            "question": "Can you share your perspective on balancing automation with safety and privacy concerns in LLM applications?",
+            "required": true,
+            "follow_up_guidance": "Listen for examples or principles guiding safe and privacy-conscious automation decisions.",
+            "max_probes": 1,
+            "priority": "must",
+            "budget_seconds": 215,
+            "source": "job",
+            "evidence_quote": "",
+            "basis": "Job requires good judgment about safety, privacy, and when not to automate."
+          },
+          {
+            "topic": "Collaboration with Product Managers",
+            "question": "How have you worked with product managers to define quality goals or 'what good looks like' for LLM features?",
+            "required": false,
+            "follow_up_guidance": "Probe for communication style, alignment processes, and examples of goal setting.",
+            "max_probes": 1,
+            "priority": "should",
+            "budget_seconds": 215,
+            "source": "job",
+            "evidence_quote": "",
+            "basis": "Job responsibility includes collaboration with product managers on quality definitions."
+          }
+        ],
+        "focus_areas": [
+          "retrieval-augmented generation",
+          "evaluation design",
+          "prompt engineering",
+          "Python and API development",
+          "safety and failure handling"
+        ],
+        "target_minutes": 45,
+        "interviewer_style": "Calm, concise, and curious tone to encourage detailed and thoughtful responses without pressure.",
+        "closing_instructions": "Thank the candidate warmly for their time and insights. Avoid mentioning next steps, timelines, outcomes, feedback, or assessments."
+      }
+    },
+    "ops": {
+      "label": "Non-software: logistics operations manager",
+      "target_minutes": 20,
+      "seconds_to_generate": 5.9,
+      "assessment": {
+        "question_count": 4,
+        "allowed_range": [
+          3,
+          4
+        ],
+        "budget_total_seconds": 1020,
+        "budget_share_of_target": 0.85,
+        "resume_grounded": 3,
+        "evidence_verified": true,
+        "max_pairwise_similarity": 0.2,
+        "must_questions": 3,
+        "sensitive_terms_in_questions": []
+      },
+      "plan": {
+        "title": "Logistics Operations Manager interview",
+        "purpose": "Explore candidate's experience and skills in managing logistics operations, focusing on staffing, carrier management, safety, and conflict resolution.",
+        "questions": [
+          {
+            "topic": "Operations leadership and improvements",
+            "question": "Can you describe how you managed to reduce late deliveries at Andes Distribution and what challenges you faced during that process?",
+            "required": true,
+            "follow_up_guidance": "Listen for details on specific steps taken, challenges encountered, and how improvements were measured and sustained.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 272,
+            "source": "resume",
+            "evidence_quote": "Cut late deliveries from 9 percent to 4 percent by reorganising dock scheduling and introducing a daily cross-site planning call",
+            "basis": "Candidate's claim of improving delivery timeliness aligns with job requirement for operations leadership and performance management."
+          },
+          {
+            "topic": "Carrier management and negotiation",
+            "question": "Tell me about your experience negotiating carrier contracts and how you handled underperforming carriers.",
+            "required": true,
+            "follow_up_guidance": "Probe for negotiation strategies, criteria for assessing carrier performance, and outcomes of renegotiations.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 272,
+            "source": "resume",
+            "evidence_quote": "Negotiated carrier contracts and renegotiated two that were underperforming",
+            "basis": "Candidate's experience with carrier management directly relates to job responsibility of managing carrier relationships and service performance."
+          },
+          {
+            "topic": "Safety culture and staffing during peak seasons",
+            "question": "How did you lead the peak-season hiring and training plan while maintaining safety standards?",
+            "required": true,
+            "follow_up_guidance": "Seek specifics on training approaches, safety measures, and how safety incidents were monitored and prevented.",
+            "max_probes": 2,
+            "priority": "must",
+            "budget_seconds": 272,
+            "source": "resume",
+            "evidence_quote": "Led a peak-season hiring and training plan that added 35 seasonal workers without increasing safety incidents",
+            "basis": "Candidate's role in staffing and safety during peak periods is critical to job's focus on safety culture and staffing planning."
+          },
+          {
+            "topic": "Handling conflict and coaching supervisors",
+            "question": "Can you share an example of a difficult people situation you managed and how you coached supervisors through it?",
+            "required": false,
+            "follow_up_guidance": "Look for examples of conflict resolution, fairness, communication style, and outcomes of coaching efforts.",
+            "max_probes": 2,
+            "priority": "should",
+            "budget_seconds": 204,
+            "source": "job",
+            "evidence_quote": "",
+            "basis": "Job requires coaching supervisors and handling difficult people situations fairly; no direct resume quote but important to assess interpersonal skills."
+          }
+        ],
+        "focus_areas": [
+          "Operations Leadership",
+          "Staffing and Capacity Planning",
+          "Carrier Management",
+          "Safety Culture",
+          "Conflict Resolution"
+        ],
+        "target_minutes": 20,
+        "interviewer_style": "Warm, curious, and supportive tone to encourage detailed responses, especially on conflict and safety trade-offs under pressure.",
+        "closing_instructions": "Thank the candidate warmly for their time and insights. Avoid discussing next steps, timelines, outcomes, feedback, or assessments."
+      }
+    }
+  }
+}

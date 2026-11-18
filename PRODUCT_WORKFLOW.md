@@ -1,21 +1,28 @@
-# Product workflow and transition
+# Product workflow
 
-## Target product
+## Target and current behaviour
 
-An admin uses one **Schedule interview** form: candidate name and email, résumé, job description, optional interviewer instructions, schedule/timezone and estimated duration. AI prepares ordered questions and follow-up guidance. The admin may request tweaks but does not author questions manually. The candidate joins through a private invitation without an account, confirms a self-reported full name, checks devices and attends. The AI interviews without coaching, scores or feedback. Admins review saved records and download Conversation PDFs.
+An administrator uses one **Schedule interview** form: candidate name and email, résumé (PDF/DOCX), job description (pasted or PDF/DOCX), optional private interviewer instructions, local date/time with timezone and target duration. The latest permitted start defaults to 30 minutes after the scheduled time and is adjustable under Advanced settings. Saving schedules the interview and queues both question preparation and invitation delivery; neither waits for the other and neither blocks the form. There is **no mandatory review or confirmation step**. Review and natural-language changes are optional afterwards. There is no manual question builder.
 
-The résumé parser, AI preparation, tweak request and new scheduling form are **not implemented**. New interview scheduling is being updated. This cleanup removes the old authoring flow rather than presenting a fake replacement. [PRODUCT_CLEANUP.md](PRODUCT_CLEANUP.md) records the keep/remove inventory.
+The candidate joins with a private invitation without an account, confirms a self-reported full name, acknowledges the snapshot disclosure, checks devices and attends. The interviewer AI conducts a conversation without coaching, feedback, scores or hiring decisions. Administrators download a Conversation PDF with one acknowledged camera snapshot.
 
-## Existing invitations and records
+## Statuses
 
-Published plan versions, assignments, invitation digests, candidate sessions, audits, accounts, transcripts, snapshots and PDFs remain in PostgreSQL/private storage. Existing assignments keep their immutable plan and joining window. Admins can inspect a frozen plan read-only, resend an unstarted invitation, cancel an unstarted assignment, and review all historical records. No migration or data deletion is part of this transition. Candidate invitation redemption, name confirmation, media setup and assigned-plan execution remain available.
+- **Interview:** assigned → starting → in_progress → completed / ended_early / interrupted / failed (or cancelled / expired).
+- **Preparation:** pending → preparing → ready, or failed (retryable by the administrator).
+- **Invitation:** pending → sending → sent, or failed (retried automatically, then Resend).
+- **Change request:** queued → running → succeeded / failed / cancelled. A failed or cancelled request leaves the previous ready plan in force.
 
 ## Access and lifecycle
 
-Admin login/password reset, CSRF and permissions are server-enforced. GET of an opaque invitation is scanner-safe; explicit rate-limited redemption creates a restricted HttpOnly candidate session scoped to one assignment. A forwarded link can be used by its holder; neither the link, name, email nor snapshot proves identity. Candidate sessions cannot access admin records or PDFs. The joining window gates Begin, not an active interview. A locked start and unique assignment-attempt constraint prevent duplicate attempts. Disconnect/restart preserves a partial interrupted record; no controller-state resume is claimed.
+Admin login/reset, CSRF and permissions are server-enforced. `GET` of an invitation never redeems it; an explicit rate-limited `POST` creates a restricted HttpOnly candidate session scoped to one assignment. Sending or resending an invitation rotates the token and revokes every earlier candidate session in the same transaction, and is refused once the interview has started. A forwarded link works for whoever holds it; the link, name, email and snapshot do not prove identity.
 
-The assigned plan is the execution contract. Python owns required coverage, ordering, bounded probing and delivery-aware transitions. A future preparation service must produce a `BlueprintContent` value, persist an immutable version, then create an assignment through a server-owned scheduling operation. It must not trust candidate speech as plan instructions.
+The joining window gates **Begin**, not an interview in progress. Begin additionally requires a valid ready plan, confirmed server-side under the assignment lock; the version used is frozen on the interview record at that moment. A revision that finishes after the interview started or was cancelled is discarded.
 
-## Exclusions and verification
+## Duration
 
-No candidate accounts, coaching, feedback, scores, hiring decisions, résumé parsing or AI plan generation in this cleanup. No provider, media, PDF or persistence changes. Synthetic tests can check security and lifecycle, not real microphone quality. Production SMTP and real assigned-interview model relevance remain unverified. The historical take-home recording is not evidence for this workflow.
+The target is a soft budget based on active time (monotonic, excluding explicit media pauses). Optional probing stops as it is exhausted and optional questions are dropped; when it is exhausted the interview closes after the current candidate turn finishes. Nothing is cut off mid-speech. Questions not reached (required ones in particular) are recorded in the interview's coverage summary. Overruns of one candidate turn plus the closing are possible.
+
+## Data and scope
+
+Uploaded documents and extracted text are stored without automatic deletion (see README). All administrators see all interviews. Neither is suitable for unrelated companies. Synthetic tests cannot establish microphone quality, and production SMTP is unverified.

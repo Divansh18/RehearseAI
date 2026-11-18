@@ -4,6 +4,7 @@ import hashlib
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException, Request, Response
@@ -30,6 +31,13 @@ class CoreQuestion(BaseModel):
     required: bool = True
     follow_up_guidance: str = Field(default="", max_length=500)
     max_probes: int = Field(default=1, ge=0, le=2)
+    # Fields below are optional so historical frozen plans remain valid. They are private to
+    # administrators: the live interview model and candidate APIs never receive them.
+    priority: Literal["must", "should", "could"] = "should"
+    budget_seconds: int | None = Field(default=None, ge=30, le=900)
+    source: Literal["resume", "job", "both", "general"] = "general"
+    evidence_quote: str = Field(default="", max_length=300)
+    basis: str = Field(default="", max_length=240)
 
 
 class BlueprintContent(BaseModel):
@@ -86,17 +94,32 @@ def invitation_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def assignment_public(assignment: InterviewAssignment, blueprint: BlueprintContent) -> dict:
+def plan_state(assignment: InterviewAssignment) -> str:
+    """What a candidate may know about preparation: ready, preparing or unavailable."""
+    if assignment.blueprint_version_id is not None and assignment.preparation_status == "ready":
+        return "ready"
+    return "unavailable" if assignment.preparation_status == "failed" else "preparing"
+
+
+def assignment_public(assignment: InterviewAssignment, blueprint: BlueprintContent | None) -> dict:
+    """Candidate-facing fields only: never plan content, résumé or private instructions."""
+    state = plan_state(assignment)
+    ready = state == "ready" and blueprint is not None
     return {
-        "title": blueprint.title,
+        "title": blueprint.title if (ready and blueprint) else "Candidate interview",
         "candidate_name": assignment.candidate_name,
         "self_reported_name": assignment.self_reported_name,
         "candidate_instructions": assignment.candidate_instructions,
         "scheduled_start_at": assignment.scheduled_start_at.isoformat(),
         "latest_start_at": assignment.latest_start_at.isoformat(),
         "timezone": assignment.timezone,
-        "target_minutes": blueprint.target_minutes,
-        "question_count": len(blueprint.questions),
+        "target_minutes": assignment.target_minutes
+        or (blueprint.target_minutes if blueprint else None),
+        "question_count": len(blueprint.questions) if (ready and blueprint) else None,
+        # A ready-looking assignment whose stored plan no longer validates is unavailable.
+        "plan_state": "ready"
+        if ready
+        else ("preparing" if state == "preparing" else "unavailable"),
         "status": (
             "expired"
             if assignment.status == "assigned" and assignment.latest_start_at < now()

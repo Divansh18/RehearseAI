@@ -87,8 +87,9 @@ class InterviewAssignment(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    blueprint_version_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT"), nullable=False
+    # Null until automatic preparation has produced a valid plan version.
+    blueprint_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT"), nullable=True
     )
     candidate_email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
     candidate_name: Mapped[str | None] = mapped_column(String(120))
@@ -102,6 +103,12 @@ class InterviewAssignment(Base):
     invitation_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     invitation_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     mail_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    # pending -> preparing -> ready | failed. Existing assignments are 'ready'.
+    preparation_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="ready", server_default="ready"
+    )
+    preparation_error: Mapped[str | None] = mapped_column(String(64))
+    target_minutes: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -152,6 +159,12 @@ class InterviewRecord(Base):
     pdf_error: Mapped[str | None] = mapped_column(String(120))
     snapshot_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_started")
     snapshot_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The plan version this attempt ran, frozen atomically when the attempt starts.
+    blueprint_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT")
+    )
+    # Number-only account of questions asked, covered, skipped for time or not reached.
+    coverage_summary: Mapped[dict | None] = mapped_column(JSON)
 
 
 class TranscriptEntry(Base):
@@ -176,3 +189,64 @@ class TranscriptEntry(Base):
     interrupted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     output_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     output_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InterviewPreparation(Base):
+    """Private inputs for automatic plan preparation. Never exposed to candidates."""
+
+    __tablename__ = "interview_preparation"
+    __table_args__ = (
+        UniqueConstraint("created_by", "idempotency_key", name="uq_preparation_idempotency"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("interview_assignment.id", ondelete="RESTRICT"), nullable=False, unique=True
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("candidate.id", ondelete="RESTRICT"), nullable=False
+    )
+    blueprint_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("interview_blueprint.id", ondelete="RESTRICT")
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    resume_filename: Mapped[str] = mapped_column(String(200), nullable=False)
+    resume_path: Mapped[str] = mapped_column(String(96), nullable=False)
+    resume_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    resume_pages: Mapped[int] = mapped_column(Integer, nullable=False)
+    resume_text: Mapped[str] = mapped_column(Text, nullable=False)
+    jd_source: Mapped[str] = mapped_column(String(8), nullable=False)
+    jd_filename: Mapped[str | None] = mapped_column(String(200))
+    jd_path: Mapped[str | None] = mapped_column(String(96))
+    jd_sha256: Mapped[str | None] = mapped_column(String(64))
+    job_description_text: Mapped[str] = mapped_column(Text, nullable=False)
+    interviewer_instructions: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    target_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InterviewJob(Base):
+    """A durable unit of background work: prepare, revise or invite."""
+
+    __tablename__ = "interview_job"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("interview_assignment.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String(32))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("candidate.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

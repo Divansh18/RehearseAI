@@ -1,0 +1,15 @@
+AI Engineer, LLM Applications
+
+Join a small team building customer-facing assistants on top of large language models. You will own the quality of our retrieval, prompting and evaluation pipelines.
+
+Responsibilities
+- Design retrieval-augmented generation systems and measure their quality
+- Build offline and online evaluation, including regression tests for prompts and models
+- Reduce hallucinations and handle failure modes safely
+- Work with product managers to define what good looks like
+
+Requirements
+- Experience shipping LLM-powered features to production
+- Solid Python and API development skills
+- Ability to design experiments and interpret results
+- Good judgement about safety, privacy and when not to automate

@@ -1,0 +1,18 @@
+Marcus Okafor
+Applied ML Engineer, Toronto
+
+Profile
+Engineer working on retrieval and evaluation for LLM-based products. Prefers measurable quality over demos.
+
+Experience
+Halcyon Health, ML Engineer (2022 to present)
+Built a retrieval-augmented question answering system over internal clinical guidelines for nurses. Created an evaluation harness of 600 hand-labelled questions and used it to catch a regression when the embedding model was upgraded. Reduced unsupported answers from 14 percent to 3 percent by adding citation checks and a refusal path. Ran A/B tests on prompt changes and wrote the team guidance on prompt versioning.
+
+Lumen Analytics, Data Scientist (2019 to 2022)
+Developed churn prediction models in Python with scikit-learn and later migrated them to a feature store. Presented findings to non-technical stakeholders each quarter.
+
+Projects
+Open-source contributor to a document parsing library; added table extraction for scanned forms.
+
+Skills
+Python, PyTorch, vector databases, evaluation design, prompt engineering, FastAPI, Docker

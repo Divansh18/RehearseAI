@@ -48,6 +48,27 @@ let previousOverflow = '';
 let questionTotal = 1;
 let invitationReady = false;
 
+let readinessTimer = null;
+
+// Begin stays locked until the server says the interview plan is ready; this only reports it.
+function showPreparation(assignment) {
+  const note = document.querySelector('#prep-message');
+  clearTimeout(readinessTimer);
+  if (assignment.plan_state === 'preparing' && assignment.status === 'assigned') {
+    note.textContent = 'Your interviewer is still preparing your interview. You can finish your device checks now. Begin unlocks on its own when it is ready.';
+    note.hidden = false;
+    readinessTimer = setTimeout(() => { if (sessionClosed) checkAccount().catch(() => {}); }, 5000);
+  } else if (assignment.plan_state === 'unavailable') {
+    note.textContent = 'Your interview is not ready to begin. Please contact the interviewer.';
+    note.hidden = false;
+  } else if (assignment.plan_state === 'ready' && assignment.status === 'assigned' && assignment.window_state === 'open') {
+    note.textContent = 'Your interview is ready. Complete the checks above and begin when you are ready.';
+    note.hidden = false;
+  } else {
+    note.hidden = true;
+  }
+}
+
 async function checkAccount() {
   const response = await fetch('/api/candidate/interview', { credentials: 'same-origin' });
   if (response.status === 401) {
@@ -58,9 +79,10 @@ async function checkAccount() {
   if (!response.ok) throw new Error('Could not check your invitation. Reopen the private link.');
   const assignment = await response.json();
   if (!assignment.self_reported_name) { location.assign('/candidate/welcome'); return false; }
-  questionTotal = assignment.question_count;
+  questionTotal = assignment.question_count || 0;
   invitationReady = assignment.can_begin;
   progressTrack.replaceChildren(...Array.from({ length: questionTotal }, () => document.createElement('span')));
+  showPreparation(assignment);
   if (assignment.window_state === 'too_early') {
     document.querySelector('#setup-message').textContent = 'The joining window has not opened yet. You can check devices now, then refresh when it opens.';
   } else if (assignment.window_state === 'closed' || assignment.status !== 'assigned') {
@@ -537,6 +559,11 @@ async function startSession() {
       return;
     }
     if (response.status === 403) throw new Error('Secure interview setup was rejected. Refresh the page and try again.');
+    if (response.status === 409) {
+      let reason = '';
+      try { reason = (await response.json()).detail; } catch { /* no detail */ }
+      throw new Error(typeof reason === 'string' && reason ? reason : 'The interview cannot begin right now.');
+    }
     if (!response.ok) throw new Error('The local voice server rejected the connection.');
     const answer = await response.json();
     if (thisAttempt !== attempt) return;

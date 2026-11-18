@@ -59,6 +59,9 @@ class Settings:
     session_dir: Path = Path("sessions")
     pdf_dir: Path = Path("private_pdfs")
     snapshot_dir: Path = Path("private_snapshots")
+    document_dir: Path = Path("private_documents")
+    # Off for directly constructed Settings (tests drive jobs by hand); on when loaded from .env.
+    job_runner: bool = False
     stt_model: str = "nova-3-general"
     stt_keyterms: tuple[str, ...] = DEFAULT_STT_KEYTERMS
     llm_model: str = "gpt-4.1-mini"
@@ -111,6 +114,9 @@ class Settings:
                 raise ConfigurationError(f"{name} must be between {low} and {high}")
             return result
 
+        job_runner = values.get("REHEARSE_JOB_RUNNER", "on").strip().lower()
+        if job_runner not in {"on", "off"}:
+            raise ConfigurationError("REHEARSE_JOB_RUNNER must be on or off")
         host = values.get("REHEARSE_HOST", "127.0.0.1")
         if host not in {"127.0.0.1", "localhost", "::1"}:
             raise ConfigurationError("REHEARSE_HOST must be a loopback address for local use")
@@ -227,6 +233,8 @@ class Settings:
             session_dir=Path(values.get("REHEARSE_SESSION_DIR", "sessions")),
             pdf_dir=Path(values.get("REHEARSE_PDF_DIR", "private_pdfs")),
             snapshot_dir=Path(values.get("REHEARSE_SNAPSHOT_DIR", "private_snapshots")),
+            document_dir=Path(values.get("REHEARSE_DOCUMENT_DIR", "private_documents")),
+            job_runner=job_runner == "on",
             stt_model=values.get("REHEARSE_STT_MODEL", "nova-3-general"),
             stt_keyterms=parse_stt_keyterms(
                 values.get("REHEARSE_STT_KEYTERMS", ",".join(DEFAULT_STT_KEYTERMS))

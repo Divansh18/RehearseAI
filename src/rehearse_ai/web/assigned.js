@@ -44,7 +44,7 @@ async function invitationPage() {
     document.querySelector('#invitation-detail').textContent =
       `${data.title}. Scheduled ${time(data.scheduled_start_at, data.timezone)} ${data.timezone}. ` +
       `Begin by ${time(data.latest_start_at, data.timezone)} ${data.timezone}. ` +
-      `Estimated duration: ${data.target_minutes} minutes. ` +
+      (data.target_minutes ? `Estimated duration: ${data.target_minutes} minutes. ` : '') +
       'You will need a camera, microphone, speakers, and screen sharing.';
     button.disabled = false;
   } catch (error) { showError(error); return; }
@@ -74,9 +74,16 @@ async function welcomePage() {
       throw new Error(data.status === 'completed' ? 'This interview is complete.' :
         'This interview can no longer be started. Contact the interviewer.');
     }
-    if (data.window_state === 'too_early') {
-      document.querySelector('#message').textContent = 'You can confirm your name now. Begin will be available when the joining window opens.';
-      document.querySelector('#message').hidden = false;
+    const note = (text) => {
+      const node = document.querySelector('#message');
+      node.textContent = text; node.dataset.error = 'false'; node.hidden = false;
+    };
+    if (data.plan_state === 'preparing') {
+      note('Your interviewer is still preparing your interview. You can confirm your name and check your devices now; Begin unlocks automatically when it is ready.');
+    } else if (data.plan_state === 'unavailable') {
+      note('Your interview is not ready to begin. Please contact the interviewer.');
+    } else if (data.window_state === 'too_early') {
+      note('You can confirm your name now. Begin will be available when the joining window opens.');
     }
     if (data.window_state === 'closed') {
       document.querySelector('#name-form').hidden = true;

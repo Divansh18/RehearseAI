@@ -1,0 +1,18 @@
+Priya Raman
+Senior Backend Engineer, Lisbon
+
+Summary
+Backend engineer with nine years of experience building payment and ledger services. I like boring, reliable systems with good observability.
+
+Experience
+Northwind Payments, Staff Engineer (2021 to present)
+Led the redesign of the settlement ledger from a single Postgres database into an event-sourced service processing about 4 million transactions per day. Introduced idempotency keys across all write APIs, which removed a class of double-charge incidents. Reduced p99 settlement latency from 2.4 seconds to 700 milliseconds by moving reconciliation to batched consumers on Kafka. Mentored five engineers and ran the on-call rotation for a team of eight.
+
+Brightloop Commerce, Senior Software Engineer (2017 to 2021)
+Built the order management API in Python and Go. Owned the migration from a monolith to six services and wrote the rollout plan, including a shadow-traffic phase. Designed the database sharding strategy for the orders table.
+
+Skills
+Python, Go, PostgreSQL, Kafka, Redis, Kubernetes, OpenTelemetry, Terraform
+
+Education
+BSc Computer Science, University of Porto

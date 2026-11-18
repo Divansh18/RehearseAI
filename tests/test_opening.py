@@ -572,7 +572,8 @@ async def test_speech_queue_and_pipeline_failures_are_published(tmp_path):
         message["event"] for message in published if message["event"]["event"] == "response_error"
     ]
     assert [error["failure_stage"] for error in errors] == ["speech_queue", "pipeline"]
-    assert errors[0]["utterance_id"] == session.controller.pending.id
+    # Browser errors carry fixed labels only; the utterance id and details stay in the log.
+    assert set(errors[0]) == {"event", "failure_stage", "processor", "error_code"}
     assert errors[1]["processor"] == "OpenAITTSService"
     await session.close()
 

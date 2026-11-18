@@ -1,12 +1,12 @@
 # RehearseAI
 
-RehearseAI conducts a private, company interview from an immutable, structured interview plan. An administrator signs in to review existing assignments and saved interviews. An invited candidate confirms a self-reported name, checks devices, acknowledges one camera snapshot for the admin PDF, and explicitly begins. The interview is conversational and stores its transcript incrementally. It does not coach, score, suggest answers, or provide candidate feedback.
+RehearseAI is a company-facing AI interview platform. An administrator fills in **one Schedule interview form** (candidate, résumé, job description, optional private instructions, date/time/timezone and target duration). The system saves the interview, emails the candidate a private invitation and prepares candidate-specific questions in the background. The candidate joins from the link without an account, confirms their name, acknowledges one camera snapshot, checks devices and takes a conversational voice interview. The AI gives no coaching, feedback, scores or hiring decisions. Administrators download a Conversation PDF (conversation plus one acknowledged camera snapshot).
 
-**Transition:** New interview scheduling is being updated. The manual question editor, publication flow, and assignment creation form are retired. Existing invitations and frozen plans remain usable. The next milestone will offer one Schedule interview form with candidate details, résumé, job description, optional interviewer instructions, timezone/window, and estimated duration. It will prepare and validate the interview plan automatically; none of that preparation is implemented yet. See [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md) and [PRODUCT_CLEANUP.md](PRODUCT_CLEANUP.md).
+There is no manual question builder. Questions are generated from the documents; an administrator may *optionally* review them and ask for changes in plain language.
 
 ## Local setup
 
-Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker Compose, and a desktop browser with camera, microphone, and screen capture on localhost or HTTPS.
+Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker Compose, and a desktop browser with camera, microphone and screen capture on localhost or HTTPS.
 
 ```sh
 docker compose up -d --wait
@@ -14,7 +14,7 @@ uv sync --frozen --group dev
 test -f .env || cp .env.example .env
 ```
 
-Fill `.env` without committing it: `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `CARTESIA_API_KEY` for the default voice, and a random `REHEARSE_AUTH_SECRET` of at least 32 characters. `DATABASE_URL` selects PostgreSQL; keep development and test databases separate. `REHEARSE_PUBLIC_BASE_URL` must match invitation links, and `REHEARSE_INTERVIEWER_NAME` is the company/interviewer display name. OpenAI TTS remains an explicit fallback via `REHEARSE_TTS_PROVIDER=openai`. `.env.example` lists all voice, turn, storage, SMTP and server settings. Keys stay server-side.
+Fill `.env` without committing it: `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `CARTESIA_API_KEY` for the default voice, and a random `REHEARSE_AUTH_SECRET` of at least 32 characters. `DATABASE_URL` selects PostgreSQL; keep development and test databases separate. `REHEARSE_PUBLIC_BASE_URL` must match invitation links and `REHEARSE_INTERVIEWER_NAME` is the company/interviewer display name. `REHEARSE_LLM_MODEL` selects the OpenAI text model used both for plan preparation and the live interview. `.env.example` lists every voice, turn, storage, SMTP, job and server setting. Keys stay server-side.
 
 ```sh
 uv run alembic upgrade head
@@ -22,32 +22,88 @@ uv run python -m rehearse_ai.admin --create admin@example.com
 uv run python -m rehearse_ai
 ```
 
-The admin command asks for a password; there is no default admin. For a preserved active account, `uv run python -m rehearse_ai.admin admin@example.com` promotes it. Open [http://127.0.0.1:7860/](http://127.0.0.1:7860/) and sign in. [Mailpit](http://127.0.0.1:8025/) captures local invitation and password-reset email; it is not external delivery. Production requires HTTPS, secure cookies, a production database and real SMTP credentials. Production email delivery and deployment are unverified.
+The admin command asks for a password; there is no default admin. For a preserved active account, `uv run python -m rehearse_ai.admin admin@example.com` promotes it. Open [http://127.0.0.1:7860/](http://127.0.0.1:7860/) and sign in. [Mailpit](http://127.0.0.1:8025/) captures all local invitation and password-reset email; nothing is delivered externally. Production requires HTTPS, secure cookies, a production database and real SMTP credentials. **Production email delivery and deployment are unverified.**
 
-## Existing interview workflow
+## How it works
 
-- **Assignments** shows existing invitations, statuses, a read-only frozen-plan inspection, resend, and cancel for unstarted assignments. New creation and manual editing are unavailable during this transition.
-- Candidates open an existing private link and explicitly redeem it. They confirm a self-reported full name, complete camera/microphone/speaker/screen checks, acknowledge snapshot disclosure, and click **Begin interview**. A page visit or device check creates no attempt. The joining window gates start only.
-- **Records** shows historical and assigned attempts. Only admins can view, download or regenerate private Conversation PDFs. Candidates have no account, password, dashboard, transcript or PDF access.
+### Administrator
 
-The entered name, email, invitation possession and camera snapshot do not establish identity. A link can be forwarded. GET/link preview does not redeem it; a CSRF-protected POST exchanges it for a restricted, expiring, revocable HttpOnly cookie. Token-bearing pages use same-origin assets and `Referrer-Policy: no-referrer`; server access logging omits tokens.
+1. **Schedule interview** (`/admin/schedule`): candidate name and email; résumé (PDF or DOCX); job description (pasted or PDF/DOCX); optional *private* interviewer instructions; local date/time with a visible timezone; target duration (5–120 min). The latest permitted start defaults to 30 minutes after the scheduled time and can be changed under **Advanced settings**.
+2. Pressing **Schedule** validates everything, extracts the documents, then saves the assignment, the private inputs and two background jobs in one short transaction. It returns immediately.
+3. Two independent jobs then run: **invitation delivery** (emailed straight away, without waiting for question preparation) and **question preparation** (an OpenAI call that produces a validated, versioned plan). Their statuses are tracked and shown separately on **Assignments**.
+4. Review is optional. **Review questions** shows the plan read-only, including private notes on why each question was chosen. **Request changes** takes a natural-language request and produces a *new version*; a failed or late revision never alters the plan in use. **Retry preparation**, **Resend invitation** and **Cancel** are available for unstarted interviews.
+5. **Records** lists every attempt, including a number-only coverage account (questions asked, covered, skipped for time, required questions not reached, active time). Only administrators can open records or download/regenerate PDFs.
 
-## Architecture and lifecycle
+A submission carries an idempotency key generated when the form loads; double clicks and retries return the same interview. A conflicting reuse of a key is rejected.
 
-`server.py` owns authenticated HTTP, admin read/recovery APIs, invitation redemption and WebRTC setup. `assigned.py` validates the structured plan and joining window and contains token/session helpers. Its `BlueprintContent` is the future AI-preparation output boundary; no generated-plan service exists yet. `accounts.py` uses maintained FastAPI Users password hashing, server sessions, CSRF and SMTP. `accounts_db.py` and `migrations/` preserve plan versions, assignments, attempts and historical records. `interview.py` owns question progression, required coverage, bounded probes, utterance IDs and delivery state. `session.py` routes completed turns and spoken controls, cancels stale work, and maintains corrected session memory. `pipeline.py` assembles separate Deepgram streaming STT → OpenAI text LLM → Cartesia streaming TTS via Pipecat SmallWebRTC. Runtime prompts are in `src/rehearse_ai/prompts/` and documented in [PROMPTS.md](PROMPTS.md).
+### Candidate
 
-Each existing assignment references an immutable plan version. Database locking and a unique constraint prevent duplicate starts. `starting` is reserved only after an authorised WebRTC offer; `session_started` moves it to `in_progress`. Controller completion records `completed`; spoken/end-button stop records `ended_early`; disconnect/restart records `interrupted`; signalling/provider failure records `failed`. A restart reconciles partial records rather than silently creating another attempt. Started attempts cannot resume in this version. Historical account-owned records, transcripts, snapshots and PDFs remain admin-readable. Migration `0005_assigned_interviews` is additive; no data is dropped by this cleanup.
+Candidates open a private link (a GET never redeems it), explicitly continue, and receive a restricted, expiring, revocable HttpOnly session scoped to one assignment. They confirm a self-reported full name, acknowledge the snapshot disclosure, complete camera/microphone/speaker/screen checks and press **Begin**. While preparation is pending the welcome and setup pages work, but **Begin stays unavailable until the server confirms a valid plan is ready**; the page re-checks on its own. The server enforces this when the attempt starts; there is no fallback to generic practice questions.
 
-A bounded ordered writer persists server-owned transcript events. Raw STT is not overwritten by memory corrections. Assistant prepared, output-started, completed and interrupted states stay distinct. Server transport output-stop approximates delivery; it does not prove browser playback or the exact words heard before interruption. Barge-in cancels pending output immediately while Pipecat turn completion remains authoritative. Existing defaults are VAD confidence 0.7, start 0.2 s, stop 0.35 s and turn pause 1.1 s; these are tuning values, not measured optima. Camera and screen video remain local except for one consented camera still uploaded after session start. Video and screen sharing are not recorded.
+The entered name, email, invitation possession and camera snapshot do not establish identity, and a link can be forwarded. Candidate APIs expose only the title, window, duration and readiness state: never the questions, guidance, résumé, job description or instructions.
 
-An assigned-plan decision may mark a later question covered only with an exact cited span from a collected answer; Python validates the citation and preserves its source turn. Its quality still needs real assigned-interview review. A feedback request receives a short refusal and leaves the question pending. The professional closing has no assessment or hiring promise.
+## Architecture
 
-PDFs are generated from persisted transcript rows after terminal outcomes, with the optional still. Files are private; admin download/regeneration requires permission and CSRF for regeneration. Database/PDF/snapshot storage is local and needs backups. Persistence and PDF failures remain visible without erasing partial conversations.
+| Area | Modules |
+| --- | --- |
+| HTTP, auth, invitations, WebRTC offer | `server.py`, `assigned.py`, `accounts.py`, `admin.py`, `config.py` |
+| Scheduling, validation, invitations | `scheduling.py` |
+| Document extraction (isolated subprocess) | `documents.py` |
+| AI plan preparation and revision | `preparation.py`, `prompts/plan_prepare.txt`, `prompts/plan_revise.txt` |
+| Durable job runner | `jobs.py` |
+| Interview execution | `interview.py` (order, probes, delivery), `session.py` (turn routing, corrections, bounded model context), `budget.py` (time budget), `pipeline.py` (Deepgram → OpenAI → Cartesia via Pipecat), `browser_events.py` |
+| Persistence and PDFs | `interview_store.py`, `session_log.py`, `transcript_pdf.py`, `snapshot.py`, `accounts_db.py`, `migrations/` |
 
-## Verification and limitations
+**Jobs.** `interview_job` rows are claimed with `FOR UPDATE SKIP LOCKED` under a per-claim token; every state change is fenced by that token, so a worker that lost its lease cannot apply a stale result. Concurrency is bounded (2), model calls and SMTP have timeouts, failures retry with backoff up to 3 attempts, and the last failure is stored as a short code (never document or model text). On restart, jobs a previous process left running are re-queued. This assumes **one server process** (the host is restricted to loopback). A job can run more than once after a crash, so an invitation email may in rare cases be sent twice; each send rotates the link, so only the latest email's link works.
 
-Run `uv run --offline pytest -q`, `node --test tests/browser_ui.test.mjs`, `uv run --offline ruff check .`, `uv run --offline ruff format --check .`, `uv lock --check`, and `uv build`. PostgreSQL tests use `REHEARSE_TEST_DATABASE_URL` ending in `_test`; Compose creates a separate test database. Synthetic model/media checks do not verify microphone recognition, model relevance, browser playout or external SMTP.
+**Plan lifecycle.** Preparation creates version 1; each successful revision adds a version. Starting an attempt takes the assignment lock, checks readiness, validates the stored plan against the *current* schema, and freezes that version on the interview record, all before anything is consumed. If validation fails the attempt is not used up. Revisions need the same lock and an unstarted assignment, so the version that starts is the version that runs.
 
-To check an existing invitation: sign in as admin, inspect its assignment, read the local Mailpit invitation if previously sent or resend it, open the link in another browser context, confirm name, complete device checks, Begin, answer and interrupt, then inspect the admin record/PDF. Real devices and provider keys are needed for live voice verification. Screen capture may be unavailable on mobile. There is currently no supported UI to create a new interview.
+**Conversation.** An assigned interview opens with a short greeting using the name the candidate confirmed ("Hi Drake, how's your day going?"), one brief acknowledgement and a transition into question 1. The opening is one exchange, bounded in time, counted in active time (`opening_seconds` in the coverage summary) and can never become an answer or spend question 1's probes. Transcripts are placed by when they were created, not when they arrived, because Pipecat's turn boundary can overtake the transcript that caused it (`pipeline.py`). Speech over audio that was barely heard is not treated as a reply to it, and speech over a closing ends the interview instead of resuming it. Findings, measurements and limits are in [CONVERSATION_QUALITY.md](CONVERSATION_QUALITY.md); the real-microphone checklist is [MANUAL_VOICE_TEST.md](MANUAL_VOICE_TEST.md); `evaluation/session_timings.py` reports per-stage timings from a session log without printing any transcript.
 
-The earlier take-home [recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [recorded evidence](evidence/recorded-session/), and [submission checklist](SUBMISSION_CHECKLIST.md) describe the **historical prototype**, not this invitation workflow. They are not verification of the current product.
+**Execution.** Python owns order, required coverage and probe limits; the model proposes actions that Python validates. Each decision receives a *bounded* context: the current question and its own follow-up guidance, short topic labels for later questions (so earlier coverage can be recognised), clipped prior answers, corrected session memory and the last delivered prompt. It does not receive the full plan, future question text or guidance, grounding evidence or the administrator's private instructions. The browser receives only allowlisted events with minimal payloads (`browser_events.py`); raw model output, prompts, plan data, memory facts and errors stay in the server log. A decision is logged as validated only after validation succeeds.
+
+**Duration.** The target is a *soft* budget measured on a monotonic clock that excludes explicit media pauses. After 80% of the budget, or when required questions no longer fit, optional probing stops and optional questions are dropped. When the budget is used up the interview moves to its closing **after the current candidate turn finishes**; speech is never cut off. Possible overrun is therefore one candidate turn plus the closing, and a long silence is not timed out. Required questions that were not reached are recorded in the interview's coverage summary rather than hidden. Closing speech contains no feedback, scores or hiring promises (prompt plus a server check on the spoken text).
+
+## Documents and privacy
+
+PDF and DOCX only, up to 5 MB, PDFs up to 10 pages, text up to 30,000 (résumé) or 20,000 (job description) characters. Extraction runs in an isolated Python subprocess with a 20-second wall-clock limit and CPU limit. Encrypted, damaged, empty, scanned/image-only (no OCR), garbled, over-long and DOCX-bomb files are rejected with an explanation; incomplete text is never used silently. Résumé and job-description text, the private instructions and revision requests are sent to OpenAI to prepare questions. They are treated as untrusted data in the prompts, and the model's output is validated in Python (question count for the duration, no duplicated substance, every résumé-based question backed by a verbatim span of the résumé, normalised time budgets).
+
+### Storage and retention limitations (this milestone)
+
+- Uploaded originals are kept in `private_documents/` (mode 0600), and extracted résumé/job-description text, private instructions and generated plans are kept in PostgreSQL **indefinitely**. There is **no automatic deletion, retention schedule, redaction, export or erase-on-request** in this milestone.
+- Camera snapshots (`private_snapshots/`), PDFs (`private_pdfs/`), raw session logs (`sessions/`) and the database are local, unencrypted at rest and not backed up by the application.
+- Contents are never written to application logs, but they are stored and sent to the OpenAI, Deepgram and Cartesia services as described. Review those providers' terms and your own legal obligations before using real candidate data.
+
+### Administrator scope
+
+There is a single organisation. **Every administrator can see and act on every interview, record, plan and PDF.** It is **not safe to onboard unrelated companies** until organisation isolation is added; multi-tenancy is deliberately out of scope.
+
+## Verification
+
+```sh
+export REHEARSE_TEST_DATABASE_URL=postgresql+asyncpg://rehearse:rehearse_local_only@127.0.0.1:5433/rehearse_test
+uv run alembic upgrade head          # with DATABASE_URL pointing at the _test database
+uv run pytest -q
+node --test tests/browser_ui.test.mjs
+uv run ruff check . && uv run ruff format --check .
+uv lock --check && uv build
+uv run python evaluation/plan_preparation_check.py   # real model, invented documents (uses your OPENAI_API_KEY)
+```
+
+PostgreSQL tests need `REHEARSE_TEST_DATABASE_URL` ending in `_test` (Compose creates it) and the migrations applied to it. Mocked tests, the real-model plan check and real microphone sessions are different kinds of evidence; see [PLAN_PREPARATION_CHECKS.md](PLAN_PREPARATION_CHECKS.md) for the real-model results. Synthetic checks do not verify microphone recognition, browser playout, interview naturalness or external SMTP.
+
+### Local acceptance steps
+
+1. `docker compose up -d --wait`, then apply migrations and start the app as above.
+2. In one browser profile sign in at `/login` as an admin and open **Schedule interview**. Submit a candidate (use your own address), an invented résumé and job description, and a start time a few minutes ahead. Expect to land on **Assignments** with statuses moving from *queued* to *ready* / *sent*.
+3. Open Mailpit at `http://127.0.0.1:8025` and find the invitation. Confirm it contains the link, the window and duration but no questions or private instructions.
+4. In a **second, separate browser profile** open the link, press Continue, confirm your full name and check devices. If the plan is still preparing, Begin stays disabled until it is ready.
+5. Back in the admin profile choose **Review questions**, then try **Request changes**.
+6. When the window opens, tick the snapshot acknowledgement and press **Begin interview**; answer, interrupt, ask to repeat, ask for feedback (it is refused) and finish or end early.
+7. In **Records** open the interview, check the coverage summary and download the PDF.
+
+Real devices and provider keys are required for step 6. Screen capture may be unavailable on mobile.
+
+## Historical material
+
+The earlier take-home [recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [recorded evidence](evidence/recorded-session/) and [submission checklist](SUBMISSION_CHECKLIST.md) describe the **historical prototype** and are not verification of the current product. Historical practice code and prompts remain only for regression compatibility and cannot be reached through the invitation entry, which requires an assigned plan. See [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md), [PRODUCT_CLEANUP.md](PRODUCT_CLEANUP.md) and [PROMPTS.md](PROMPTS.md).

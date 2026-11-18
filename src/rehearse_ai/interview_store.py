@@ -7,16 +7,30 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
+from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.accounts_db import Candidate, InterviewAssignment, InterviewRecord, TranscriptEntry
+from rehearse_ai.accounts_db import (
+    BlueprintVersion,
+    Candidate,
+    InterviewAssignment,
+    InterviewRecord,
+    TranscriptEntry,
+)
+from rehearse_ai.assigned import BlueprintContent
 from rehearse_ai.transcript_pdf import build_pdf
 
 LOGGER = logging.getLogger(__name__)
 TERMINAL = {"completed", "ended_early", "interrupted", "failed"}
+
+
+class AttemptStart(NamedTuple):
+    record_id: uuid.UUID
+    version_id: uuid.UUID
+    plan: dict[str, Any]
 
 
 def event_time(event: dict[str, Any]) -> datetime:
@@ -121,8 +135,14 @@ class InterviewStore:
 
     async def create_assignment_attempt(
         self, assignment_id: uuid.UUID, build_id: str, prompt_version: str
-    ) -> uuid.UUID:
-        """Reserve the only attempt under an assignment row lock."""
+    ) -> AttemptStart:
+        """Reserve the only attempt and freeze its plan, atomically, under the assignment lock.
+
+        Every precondition is checked before anything is changed: if the plan is missing, still
+        being prepared, or fails validation against the current schema, the transaction raises
+        and the candidate's attempt is not consumed. Revisions need the same lock and require an
+        unstarted assignment, so the version frozen here is the version that runs.
+        """
         record_id = uuid.uuid4()
         async with self.db_sessions.begin() as db:
             assignment = await db.get(InterviewAssignment, assignment_id, with_for_update=True)
@@ -133,6 +153,19 @@ class InterviewStore:
                 raise ValueError("Interview cannot begin outside its joining window")
             if not assignment.self_reported_name:
                 raise ValueError("Confirm your full name before beginning")
+            if assignment.preparation_status in {"pending", "preparing"}:
+                raise ValueError("Your interview is still being prepared. Try again shortly.")
+            if assignment.preparation_status != "ready" or assignment.blueprint_version_id is None:
+                raise ValueError("The interview plan is unavailable. Contact the interviewer.")
+            version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
+            try:
+                plan = BlueprintContent.model_validate(
+                    version.content if version else None
+                ).model_dump(mode="json")
+            except ValidationError:
+                raise ValueError(
+                    "The interview plan is unavailable. Contact the interviewer."
+                ) from None
             assignment.status = "starting"
             assignment.updated_at = instant
             db.add(
@@ -147,9 +180,10 @@ class InterviewStore:
                     last_event_sequence=0,
                     pdf_status="not_ready",
                     snapshot_status="not_started",
+                    blueprint_version_id=version.id,
                 )
             )
-        return record_id
+        return AttemptStart(record_id, version.id, plan)
 
     def enqueue(self, event: dict[str, Any]) -> bool:
         session_id = event["session_id"]
@@ -323,6 +357,8 @@ class InterviewStore:
                 )
                 record.ended_at = timestamp
                 pdf_needed = True
+            if kind == "coverage_summary" and isinstance(event.get("summary"), dict):
+                record.coverage_summary = event["summary"]
             if pdf_needed:
                 record.pdf_status = "pending"
                 if record.assignment_id:

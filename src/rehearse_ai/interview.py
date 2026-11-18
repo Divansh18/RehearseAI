@@ -147,6 +147,9 @@ class InterviewController:
         self._interrupted: Utterance | None = None
         self._answers: list[list[str]] = [[] for _ in self._questions]
         self._covered_source_turns: list[int | None] = [None] * len(self._questions)
+        self._opening_text: str | None = None
+        self._time_skipped: set[int] = set()
+        self._delivered_questions: set[int] = set()
         self._closing_remarks: list[str] = []
         self._follow_ups = [0] * len(self._questions)
         self._clarifications = [0] * len(self._questions)
@@ -231,6 +234,54 @@ class InterviewController:
         self._answers[target].append(answer)
         self._covered_source_turns[target] = source_turn
         return True
+
+    def _next_open_index(self, start: int) -> int:
+        """First question at or after ``start`` that is neither covered nor skipped for time."""
+        index = start
+        while index < len(self._questions) and (
+            self._covered_source_turns[index] is not None or index in self._time_skipped
+        ):
+            index += 1
+        return index
+
+    def mark_time_skipped(self, indices: "list[int] | set[int]") -> None:
+        """Skip later questions because the soft time budget cannot afford them.
+
+        Only questions after the current one that have not been delivered or covered can be
+        skipped; the question in progress is never removed.
+        """
+        for index in indices:
+            if (
+                self._assigned
+                and index > self._question_index
+                and 0 <= index < len(self._questions)
+                and self._covered_source_turns[index] is None
+                and index not in self._delivered_questions
+            ):
+                self._time_skipped.add(index)
+
+    @property
+    def time_skipped_numbers(self) -> tuple[int, ...]:
+        return tuple(sorted(index + 1 for index in self._time_skipped))
+
+    def coverage_snapshot(self) -> dict[str, list[int] | int]:
+        """Honest, number-only account of what was and was not reached."""
+        numbers = range(1, len(self._questions) + 1)
+        delivered = sorted(index + 1 for index in self._delivered_questions)
+        covered = [n for n in numbers if self._covered_source_turns[n - 1] is not None]
+        skipped = list(self.time_skipped_numbers)
+        unreached = [
+            n for n in numbers if n in skipped or (n not in delivered and n not in covered)
+        ]
+        return {
+            "planned": len(self._questions),
+            "asked": delivered,
+            "answered": [n for n in numbers if self._answers[n - 1]],
+            "covered_from_prior_turns": covered,
+            "skipped_for_time": skipped,
+            "required_not_reached": [n for n in unreached if self._required[n - 1]],
+            "optional_not_reached": [n for n in unreached if not self._required[n - 1]],
+        }
 
     @property
     def closing_remarks(self) -> tuple[str, ...]:
@@ -353,9 +404,13 @@ class InterviewController:
             MAX_CLARIFICATIONS_PER_QUESTION - self._clarifications[index],
         )
 
-    def start(self) -> Utterance:
+    def start(self, opening: str | None = None) -> Utterance:
+        """Begin an interview. An assigned interview may open with a short greeting first."""
         self._require(Stage.NEW)
         if self._assigned:
+            if opening:
+                self._opening_text = opening
+                return self._prepare(UtteranceKind.GREETING, opening, None)
             return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
         return self._prepare(UtteranceKind.GREETING, GREETING, None)
 
@@ -367,6 +422,40 @@ class InterviewController:
         self._greeting_response = response
         self._stage = Stage.AWAITING_OPENING_ACK
         return None
+
+    def prepare_opening_transition(self, text: str) -> Utterance:
+        """Assigned opening: acknowledge briefly, then move on. Delivery leads to question one.
+
+        Opening speech never becomes an answer: question one is not current until it has
+        been delivered, so nothing said here can be stored against it or spend its probes.
+        """
+        if not self._assigned or self._stage not in {
+            Stage.AWAITING_GREETING,
+            Stage.AWAITING_OPENING_ACK,
+        }:
+            raise InvalidTransition("There is no assigned opening to complete")
+        cleaned = text.strip()
+        if not cleaned or len(cleaned) > 300:
+            raise ValueError("Opening transition must be short and nonempty")
+        return self._prepare(UtteranceKind.OPENING_ACK, cleaned, None)
+
+    def finish_after_interrupted_closing(self) -> Stage:
+        """The candidate spoke over a closing; do not replay it, just end the interview."""
+        self._require(Stage.DELIVERING)
+        interrupted = self._interrupted
+        if interrupted is None or interrupted.kind not in {
+            UtteranceKind.CLOSING,
+            UtteranceKind.EARLY_FEEDBACK,
+        }:
+            raise InvalidTransition("No closing was interrupted")
+        self._interrupted = None
+        self._pending = None
+        self._stage = (
+            Stage.ENDED_EARLY
+            if interrupted.kind is UtteranceKind.EARLY_FEEDBACK
+            else Stage.COMPLETE
+        )
+        return self._stage
 
     def add_greeting_continuation(self, text: str) -> None:
         self._require(Stage.AWAITING_OPENING_ACK)
@@ -677,7 +766,7 @@ class InterviewController:
         self._opening_repeats[phase] += 1
         if phase is Stage.AWAITING_GREETING:
             self._greeting_response = ""
-            return self._prepare(UtteranceKind.GREETING, GREETING, None)
+            return self._prepare(UtteranceKind.GREETING, self._opening_text or GREETING, None)
         return self._prepare(UtteranceKind.READINESS, READINESS_PROMPT, None)
 
     def submit_answer(self, text: str) -> Utterance | None:
@@ -781,12 +870,7 @@ class InterviewController:
                 raise ValueError("ADVANCE cannot supply speech text")
             if not self._assigned and index == 0 and self._project_established is False:
                 raise InvalidTransition("A technical example is needed before dependent questions")
-            next_index = index + 1
-            while (
-                next_index < len(self._questions)
-                and self._covered_source_turns[next_index] is not None
-            ):
-                next_index += 1
+            next_index = self._next_open_index(index + 1)
             if next_index == len(self._questions):
                 self._stage = Stage.AWAITING_FEEDBACK
                 return None
@@ -868,14 +952,11 @@ class InterviewController:
             and self._project_established is not True
         ):
             raise InvalidTransition("Cannot skip to a dependent question without a project")
-        if self._question_index == len(self._questions) - 1:
+        next_index = self._next_open_index(self._question_index + 1)
+        if next_index >= len(self._questions):
             self._stage = Stage.AWAITING_FEEDBACK
             return None
-        return self._prepare(
-            UtteranceKind.QUESTION,
-            self._questions[self._question_index + 1],
-            self._question_index + 1,
-        )
+        return self._prepare(UtteranceKind.QUESTION, self._questions[next_index], next_index)
 
     def skip_interrupted(self) -> Utterance | None:
         """Apply an explicit skip during interrupted question speech."""
@@ -963,6 +1044,8 @@ class InterviewController:
             if utterance.question_number is None:
                 raise RuntimeError("Question utterance has no question number")
             self._question_index = utterance.question_number - 1
+            if utterance.kind is UtteranceKind.QUESTION:
+                self._delivered_questions.add(self._question_index)
             self._stage = Stage.AWAITING_ANSWER
         elif utterance.kind in {UtteranceKind.FEEDBACK, UtteranceKind.CLOSING}:
             self._stage = Stage.COMPLETE

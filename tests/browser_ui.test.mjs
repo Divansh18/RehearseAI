@@ -69,7 +69,7 @@ function fixture({ active = true, fetchResponse } = {}) {
     'room-camera-preview', 'room-screen-preview', 'restore-devices',
     'restore-screen', 'room-title', 'return-overview', 'snapshot-consent', 'snapshot-status'];
   ids.push('begin-interview', 'resume', 'setup-panel', 'interview-workspace',
-    'camera-preview', 'screen-preview', 'mic-level', 'setup-message',
+    'camera-preview', 'screen-preview', 'mic-level', 'setup-message', 'prep-message',
     'enable-devices', 'share-screen', 'test-speaker', 'confirm-speaker', 'cancel-setup',
     'check-microphone', 'check-camera', 'check-screen', 'check-speaker');
   const nodes = Object.fromEntries(ids.map((id) => [id, new Element()]));
@@ -259,6 +259,26 @@ test('invitation metadata sets assigned question count without exposing a plan',
     json: async () => ({ self_reported_name: 'Nyla Example', question_count: 3, can_begin: true, window_state: 'open', status: 'assigned' }) }) });
   await interview.context.checkAccount();
   assert.equal(interview.nodes['question-progress'].children.length, 3);
+});
+
+test('a plan that is still being prepared keeps Begin locked and explains why', async () => {
+  const interview = fixture({ fetchResponse: async () => ({ ok: true, status: 200,
+    json: async () => ({ self_reported_name: 'Nyla Example', question_count: null, plan_state: 'preparing', can_begin: false, window_state: 'open', status: 'assigned' }) }) });
+  await interview.context.checkAccount();
+  assert.equal(vm.runInContext('invitationReady', interview.context), false);
+  assert.equal(interview.nodes['question-progress'].children.length, 0);
+  assert.equal(interview.nodes['prep-message'].hidden, false);
+  assert.match(interview.nodes['prep-message'].textContent, /still preparing/i);
+  // It re-checks on its own, and the server (not this page) decides when Begin unlocks.
+  assert.equal(interview.timeouts.size > 0, true);
+});
+
+test('an unavailable plan never shows a begin path', async () => {
+  const interview = fixture({ fetchResponse: async () => ({ ok: true, status: 200,
+    json: async () => ({ self_reported_name: 'Nyla Example', question_count: null, plan_state: 'unavailable', can_begin: false, window_state: 'open', status: 'assigned' }) }) });
+  await interview.context.checkAccount();
+  assert.equal(vm.runInContext('invitationReady', interview.context), false);
+  assert.match(interview.nodes['prep-message'].textContent, /contact the interviewer/i);
 });
 
 test('End session releases tracks and connections immediately', () => {

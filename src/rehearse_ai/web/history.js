@@ -87,10 +87,30 @@ async function loadAssignmentOverview() {
   assignments.slice(0, 5).forEach((assignment) => {
     const row = item('div', '', 'record-row');
     row.append(item('strong', assignment.candidate_email));
-    row.append(item('small', `${label(assignment.status)} · invitation email: ${assignment.mail_status}`));
+    row.append(item('small', `${label(assignment.status)} · questions: ${assignment.preparation_status} · invitation: ${assignment.mail_status}`));
     container.append(row);
   });
-  if (!assignments.length) container.append(item('p', 'No existing assignments. New scheduling is being updated.', 'muted'));
+  if (!assignments.length) container.append(item('p', 'No interviews scheduled yet. Use Schedule interview to create one.', 'muted'));
+}
+
+function renderCoverage(coverage) {
+  const card = document.querySelector('#coverage-card');
+  if (!coverage || !card) return;
+  const numbers = (list) => (list && list.length ? list.join(', ') : 'none');
+  const minutes = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  const lines = [
+    `Questions planned: ${coverage.planned}`,
+    `Asked: ${numbers(coverage.asked)}`,
+    `Covered by an earlier answer: ${numbers(coverage.covered_from_prior_turns)}`,
+    `Skipped to respect the time budget: ${numbers(coverage.skipped_for_time)}`,
+    `Required questions not reached: ${numbers(coverage.required_not_reached)}`,
+    `Optional questions not reached: ${numbers(coverage.optional_not_reached)}`,
+    `Active time ${minutes(coverage.active_seconds || 0)} of a ${minutes(coverage.target_seconds || 0)} target${coverage.paused_seconds ? ` (${minutes(coverage.paused_seconds)} paused, not counted)` : ''}`,
+    `Ended: ${label(coverage.end_reason || 'unknown')}`,
+  ];
+  const list = document.querySelector('#coverage-list');
+  list.replaceChildren(...lines.map((text) => item('li', text)));
+  card.hidden = false;
 }
 
 async function loadDetail() {
@@ -115,6 +135,7 @@ async function loadDetail() {
     if (!transcript.length) conversation.append(item('p', 'No final conversation text is saved yet.', 'muted'));
     return;
   }
+  renderCoverage(record.coverage);
   const state = document.querySelector('#pdf-state');
   const download = document.querySelector('#pdf-link');
   const regenerate = document.querySelector('#pdf-regenerate');

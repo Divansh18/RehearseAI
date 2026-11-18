@@ -12,6 +12,8 @@ def load_prompt(name: str) -> str:
         "tts_style",
         "assigned_decision",
         "assigned_closing",
+        "plan_prepare",
+        "plan_revise",
     }:
         raise ValueError("Unknown prompt")
     return files("rehearse_ai").joinpath("prompts", f"{name}.txt").read_text(encoding="utf-8")

@@ -9,10 +9,9 @@
 </head>
 <body>
   <main class="dashboard-shell">
-    <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div><nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews" aria-current="page">Records</a><a href="/admin/assignments">Assignments</a></div><details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details></nav></header>
-    <div class="dashboard-title"><div><span class="eyebrow">Admin</span><h1>All interviews</h1><p>Signed in as <strong id="candidate-email">Loading…</strong></p></div></div>
-    <section class="account-card"><h2>New interview scheduling is being updated.</h2><p class="muted">Existing invitations and saved interview records remain available.</p></section>
-    <section class="account-card pdf-card"><h2>Existing assignments</h2><div id="assignment-overview" class="record-list"><p class="muted">Loading assignments…</p></div><a href="/admin/assignments">View all assignments and invitation actions</a></section>
+    <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div><nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews" aria-current="page">Records</a><a href="/admin/assignments">Assignments</a><a href="/admin/schedule">Schedule interview</a></div><details class="account-menu"><summary>Account</summary><div class="account-menu-panel"><p>Signed in to RehearseAI</p><button id="logout" type="button">Log out</button></div></details></nav></header>
+    <div class="dashboard-title"><div><span class="eyebrow">Admin</span><h1>All interviews</h1><p>Signed in as <strong id="candidate-email">Loading…</strong></p></div><a class="primary" href="/admin/schedule">Schedule interview</a></div>
+        <section class="account-card pdf-card"><h2>Recent assignments</h2><div id="assignment-overview" class="record-list"><p class="muted">Loading assignments…</p></div><a href="/admin/assignments">View all assignments, review questions and manage invitations</a></section>
     <section class="account-card pdf-card">
       <h2>Interview records</h2>
       <form id="filters" class="filter-row">

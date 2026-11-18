@@ -144,6 +144,7 @@ async def test_assigned_questions_feedback_refusal_and_closing(tmp_path):
         speak,
         lambda _event: None,
         interview_plan=PLAN,
+        opening=False,
         self_reported_name="Nyla Example",
     )
     assert session.controller.preferred_name == "Nyla Example"
@@ -191,6 +192,7 @@ async def test_correction_cancels_unheard_probe_and_replans(tmp_path):
         speak,
         lambda _event: None,
         interview_plan=PLAN,
+        opening=False,
     )
     await session.start()
     deliver(session)
@@ -229,6 +231,7 @@ async def test_spoken_stop_latches_over_pending_assigned_response(tmp_path):
         speak,
         lambda _event: None,
         interview_plan=PLAN,
+        opening=False,
     )
     await session.start()
     deliver(session)
@@ -312,6 +315,7 @@ async def test_prior_answer_coverage_skips_redundant_authored_question(tmp_path)
         speak,
         lambda _event: None,
         interview_plan=plan,
+        opening=False,
     )
     await session.start()
     deliver(session)
@@ -385,7 +389,9 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
         assert admin.post("/api/admin/blueprints", json=PLAN, headers=headers).status_code == 404
         assert admin.get("/api/admin/blueprints").status_code == 404
         assert admin.get("/admin/assignments").status_code == 200
-        assert "New interview scheduling is being updated" in admin.get("/admin/interviews").text
+        dashboard = admin.get("/admin/interviews").text
+        assert "Schedule interview" in dashboard and "being updated" not in dashboard
+        assert admin.get("/admin/schedule").status_code == 200
 
         assignment_id, version_id, token = asyncio.run(existing_assignment(admin_email))
         payload = {
@@ -457,7 +463,11 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
             assert accepted.status_code == 200, accepted.text
             first = uuid.UUID(captured[0]["session_id"])
             assert captured[0]["candidate_id"] == assignment_id
-            assert captured[0]["interview_plan"]["questions"] == PLAN["questions"]
+            # The live plan is the schema-validated dump: authored fields preserved, defaults added.
+            assert [
+                {key: item[key] for key in PLAN["questions"][0]}
+                for item in captured[0]["interview_plan"]["questions"]
+            ] == PLAN["questions"]
             assert (
                 candidate.post("/api/offer", json=offer, headers=candidate_headers).status_code
                 == 409

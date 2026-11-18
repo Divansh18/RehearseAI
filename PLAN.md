@@ -1,14 +1,23 @@
 # RehearseAI plan
 
-The target and transitional workflow are in [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md). Current admin pages show existing assignments and records. New interview scheduling is being updated; manual blueprint/assignment authoring has been retired. Existing frozen assigned plans remain executable.
+The product and its boundaries are described in [README.md](README.md) and [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md).
 
-## Current boundaries
+## Current state
 
-- `assigned.py` validates a structured interview plan and joining window. Published versions remain immutable. The next milestone's résumé/JD preparation service should produce a validated `BlueprintContent` before a server-owned assignment is created; no parser, generator or scheduler exists yet.
-- `server.py` owns admin auth, invitation/session access, read-only plan inspection, existing assignment recovery, WebRTC setup and protected record/PDF routes. PostgreSQL migrations preserve historical data.
-- `interview.py` owns plan progression and delivery-aware state; `session.py` routes turns and corrections; `pipeline.py` assembles Deepgram STT, OpenAI text inference and Cartesia TTS. No candidate account or admin question editor is offered.
-- Browser media setup and the compact interview room remain unchanged. The bounded writer persists transcript events; terminal records trigger private PDF generation.
+- **Scheduling.** One Schedule interview form saves the assignment, private preparation inputs and two jobs atomically, then returns. `scheduling.py` validates the form (timezone-aware, rejecting daylight-saving gaps and overlaps) and is idempotent per form load.
+- **Preparation.** `preparation.py` generates a versioned `BlueprintContent` from the résumé, job description, private instructions and duration, validates it in Python and stores it as an immutable version. Optional natural-language revisions create new versions. Candidates cannot begin until the server has a valid ready plan.
+- **Jobs.** `jobs.py` is a PostgreSQL-backed runner (claiming, leases, fenced results, retries, restart recovery). Preparation and invitation delivery are separate jobs with separate statuses.
+- **Execution.** Unchanged providers and media handling. Model context per decision is bounded; browser events are allowlisted; the target duration is a soft budget (`budget.py`); coverage, including required questions not reached, is recorded.
+- **Conversation.** Confirmed-name opening, late-transcript placement, heard-enough interruption handling, closing-interruption handling and per-stage latency logging are implemented and tested synthetically. See [CONVERSATION_QUALITY.md](CONVERSATION_QUALITY.md). Not yet verified with a real microphone: run [MANUAL_VOICE_TEST.md](MANUAL_VOICE_TEST.md).
+- **Admin scope.** Single organisation, global admins. Unsafe for unrelated companies; no multi-tenancy by design in this milestone.
 
-## Next milestone and verification gates
+## Open checks and known limits
 
-Implement the one Schedule interview form and validated AI plan preparation without exposing authored questions to candidates. Preserve version isolation and existing invitations. Before release, verify PostgreSQL security/concurrency, browser and Mailpit flow, migrations, lock/build, and a live device interview. Real microphone behavior, production SMTP, resume after disconnect, model relevance and local storage backups remain open checks.
+- Real microphone sessions with a prepared plan, production SMTP, resume after disconnect (there is none), model relevance at scale and backups/retention of local storage remain unverified or unimplemented. See README "Storage and retention limitations".
+- Real-model plan checks (three invented scenarios, one run each) are recorded in [PLAN_PREPARATION_CHECKS.md](PLAN_PREPARATION_CHECKS.md). They are a small sample, not an evaluation.
+- Live follow-up quality under the reduced context has been tested with scripted models only.
+- The job runner assumes one server process.
+
+## Possible next milestones (not started)
+
+Retention and deletion controls; organisation isolation; OCR for scanned documents; resume-after-disconnect; richer revision history UI; a real-voice evaluation of assigned interviews.

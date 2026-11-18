@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RehearseAI — Schedule interview</title>
+  <link rel="stylesheet" href="/assets/theme.css?v=__BUILD_ID__">
+  <link rel="stylesheet" href="/assets/account.css?v=__BUILD_ID__">
+</head>
+<body>
+  <main class="dashboard-shell">
+    <header class="dashboard-header"><div><a class="brand" href="/admin/interviews">RehearseAI</a><p>Admin workspace</p></div><nav class="header-actions" aria-label="Main navigation"><div class="top-nav"><a href="/admin/interviews">Records</a><a href="/admin/assignments">Assignments</a><a href="/admin/schedule" aria-current="page">Schedule interview</a></div><button id="logout" class="secondary" type="button">Log out</button></nav></header>
+    <div class="dashboard-title"><div><span class="eyebrow">New interview</span><h1>Schedule interview</h1><p>Add the candidate, their résumé and the job description. Questions are prepared automatically and the invitation is emailed straight away.</p></div></div>
+    <div id="form-errors" class="form-errors" role="alert" tabindex="-1" hidden></div>
+    <form id="schedule-form" class="schedule-form" novalidate>
+      <section class="account-card">
+        <h2>Candidate</h2>
+        <div class="field-grid">
+          <div class="field"><label for="candidate_name">Full name</label><input id="candidate_name" name="candidate_name" type="text" maxlength="120" autocomplete="off" required aria-describedby="err-candidate_name"><p class="field-error" id="err-candidate_name" hidden></p></div>
+          <div class="field"><label for="candidate_email">Email address</label><input id="candidate_email" name="candidate_email" type="email" maxlength="320" autocomplete="off" required aria-describedby="err-candidate_email"><p class="field-error" id="err-candidate_email" hidden></p></div>
+        </div>
+      </section>
+
+      <section class="account-card">
+        <h2>Documents</h2>
+        <p class="muted">PDF or DOCX, up to 5 MB each. Text must be selectable: scanned or image-only files, password-protected files and legacy .doc files are not supported.</p>
+        <div class="field"><label for="resume">Résumé</label><input id="resume" name="resume" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required aria-describedby="err-resume"><p class="field-error" id="err-resume" hidden></p></div>
+        <fieldset class="segmented"><legend>Job description</legend>
+          <label><input type="radio" name="jd_mode" value="paste" checked> Paste text</label>
+          <label><input type="radio" name="jd_mode" value="file"> Upload a file</label>
+        </fieldset>
+        <div class="field" id="jd-paste"><label for="job_description_text" class="visually-hidden">Job description text</label><textarea id="job_description_text" name="job_description_text" rows="8" maxlength="20000" placeholder="Paste the job description here" aria-describedby="err-job_description"></textarea></div>
+        <div class="field" id="jd-file" hidden><label for="job_description_file" class="visually-hidden">Job description file</label><input id="job_description_file" name="job_description_file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></div>
+        <p class="field-error" id="err-job_description" hidden></p>
+      </section>
+
+      <section class="account-card">
+        <h2>Interviewer instructions <span class="pill">Private · optional</span></h2>
+        <p class="muted">Anything you want the question writer to emphasise or avoid. This is used only to prepare the questions. It is never shown to the candidate and is not part of the candidate's invitation.</p>
+        <div class="field"><label for="interviewer_instructions" class="visually-hidden">Private interviewer instructions</label><textarea id="interviewer_instructions" name="interviewer_instructions" rows="4" maxlength="2000" placeholder="For example: focus on reliability and mentoring; keep the tone relaxed." aria-describedby="err-interviewer_instructions"></textarea><p class="field-error" id="err-interviewer_instructions" hidden></p></div>
+      </section>
+
+      <section class="account-card">
+        <h2>Schedule</h2>
+        <div class="field-grid">
+          <div class="field"><label for="scheduled_local">Date and time</label><input id="scheduled_local" name="scheduled_local" type="datetime-local" required aria-describedby="err-scheduled_local"><p class="field-error" id="err-scheduled_local" hidden></p></div>
+          <div class="field"><label for="timezone">Timezone</label><input id="timezone" name="timezone" type="text" list="timezones" autocomplete="off" spellcheck="false" required aria-describedby="err-timezone tz-hint"><datalist id="timezones"></datalist><p class="field-hint" id="tz-hint"></p><p class="field-error" id="err-timezone" hidden></p></div>
+          <div class="field"><label for="target_minutes">Target duration (minutes)</label><input id="target_minutes" name="target_minutes" type="number" min="5" max="120" step="5" value="30" required aria-describedby="err-target_minutes duration-hint"><p class="field-hint" id="duration-hint">A soft budget: the interview adapts and may run slightly over.</p><p class="field-error" id="err-target_minutes" hidden></p></div>
+        </div>
+        <p id="window-summary" class="window-summary" aria-live="polite"></p>
+        <details class="advanced"><summary>Advanced settings</summary>
+          <div class="field"><label for="join_window_minutes">Latest permitted start (minutes after the scheduled time)</label><input id="join_window_minutes" name="join_window_minutes" type="number" min="5" max="1440" step="5" value="30" aria-describedby="err-join_window_minutes"><p class="field-hint">After this the candidate can no longer begin. It does not end an interview already in progress.</p><p class="field-error" id="err-join_window_minutes" hidden></p></div>
+        </details>
+      </section>
+
+      <div class="form-actions">
+        <button id="submit" class="primary" type="submit">Schedule interview</button>
+        <p class="muted">Saving schedules the interview, emails the invitation and starts preparing the questions in the background. You can review the plan and request changes afterwards.</p>
+      </div>
+    </form>
+    <p id="message" role="alert" hidden></p>
+  </main>
+  <script src="/assets/schedule.js?v=__BUILD_ID__" defer></script>
+</body>
+</html>

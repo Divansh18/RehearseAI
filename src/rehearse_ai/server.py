@@ -20,9 +20,9 @@ from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCRequest,
     SmallWebRTCRequestHandler,
 )
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ValidationError
 from sqlalchemy import func, or_, select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from rehearse_ai.accounts import AccountService, MailDeliveryError
@@ -33,6 +33,8 @@ from rehearse_ai.accounts_db import (
     CandidateInterviewSession,
     InterviewAssignment,
     InterviewBlueprint,
+    InterviewJob,
+    InterviewPreparation,
     InterviewRecord,
     TranscriptEntry,
 )
@@ -42,19 +44,37 @@ from rehearse_ai.assigned import (
     assignment_public,
     candidate_session,
     invitation_assignment,
-    invitation_token,
     now,
     session_expiry,
     set_candidate_cookie,
     token_digest,
 )
 from rehearse_ai.config import ConfigurationError, Settings
+from rehearse_ai.documents import MAX_UPLOAD_BYTES as MAX_DOCUMENT_BYTES
 from rehearse_ai.interview_store import TERMINAL, InterviewStore
+from rehearse_ai.jobs import JobRunner, enqueue
 from rehearse_ai.pipeline import LiveSession
+from rehearse_ai.preparation import (
+    MAX_REVISION_REQUEST,
+    OpenAIPlanGenerator,
+    PrepareHandler,
+    ReviseHandler,
+)
+from rehearse_ai.scheduling import (
+    IdempotencyConflict,
+    InvitationUnavailable,
+    InviteHandler,
+    ScheduleRejected,
+    Upload,
+    parse_fields,
+    schedule_interview,
+    send_invitation,
+)
 from rehearse_ai.snapshot import MAX_UPLOAD_BYTES, InvalidSnapshot, save_snapshot
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 PACKAGE_DIR = WEB_DIR.parent
+MAX_FORM_BYTES = 2 * MAX_DOCUMENT_BYTES + 1_500_000
 
 
 def source_build_id() -> str:
@@ -92,6 +112,19 @@ def create_app(settings: Settings) -> FastAPI:
         db_sessions, settings.session_dir, settings.pdf_dir, storage_failure, settings.snapshot_dir
     )
 
+    def current_generator():
+        # Looked up at call time so tests can substitute a fake generator on app.state.
+        return app.state.plan_generator
+
+    runner = JobRunner(
+        db_sessions,
+        {
+            "prepare": PrepareHandler(db_sessions, current_generator),
+            "revise": ReviseHandler(db_sessions, current_generator),
+            "invite": InviteHandler(db_sessions, lambda: accounts.mailer),
+        },
+    )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
@@ -99,6 +132,7 @@ def create_app(settings: Settings) -> FastAPI:
                 await db.execute(select(Candidate.id).limit(1))
                 await db.execute(select(InterviewRecord.id).limit(1))
                 await db.execute(select(InterviewBlueprint.id).limit(1))
+                await db.execute(select(InterviewJob.id).limit(1))
         except SQLAlchemyError:
             raise RuntimeError(
                 "Interview database is unavailable or unmigrated. "
@@ -114,7 +148,10 @@ def create_app(settings: Settings) -> FastAPI:
                 .values(status="expired", updated_at=now())
             )
         await store.start()
+        if settings.job_runner:
+            await runner.start()
         yield
+        await runner.stop()
         for session in tuple(sessions):
             await session.stop()
         if tasks:
@@ -128,6 +165,8 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.accounts = accounts
     app.state.interview_store = store
     app.state.active_sessions = sessions
+    app.state.jobs = runner
+    app.state.plan_generator = OpenAIPlanGenerator(settings.openai_api_key, settings.llm_model)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -193,6 +232,7 @@ def create_app(settings: Settings) -> FastAPI:
             "theme.css",
             "assigned.js",
             "assignments.js",
+            "schedule.js",
         }:
             raise HTTPException(404)
         path = WEB_DIR / name
@@ -244,11 +284,20 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(404)
         return page("join.html")
 
+    async def public_plan(db: AsyncSession, assignment: InterviewAssignment):
+        """The validated plan, or None while it is pending, failed or no longer valid."""
+        if assignment.blueprint_version_id is None:
+            return None
+        version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
+        try:
+            return BlueprintContent.model_validate(version.content) if version else None
+        except ValidationError:
+            return None
+
     @app.get("/api/invitations/{token}")
     async def invitation_preview(token: str, db: Db) -> dict:
         assignment = await invitation_assignment(db, token)
-        version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
-        return assignment_public(assignment, BlueprintContent.model_validate(version.content))
+        return assignment_public(assignment, await public_plan(db, assignment))
 
     @app.post("/api/invitations/{token}/redeem")
     async def redeem_invitation(token: str, request: Request, db: Db) -> Response:
@@ -306,11 +355,12 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/candidate/interview")
     async def candidate_interview_info(request: Request, db: Db) -> dict:
         assignment = await candidate_session(db, request)
-        version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
-        data = assignment_public(assignment, BlueprintContent.model_validate(version.content))
+        data = assignment_public(assignment, await public_plan(db, assignment))
         instant = now()
+        # Begin stays unavailable until the server knows a valid plan is ready.
         data["can_begin"] = (
             assignment.status == "assigned"
+            and data["plan_state"] == "ready"
             and assignment.scheduled_start_at <= instant <= assignment.latest_start_at
         )
         data["window_state"] = (
@@ -390,64 +440,12 @@ def create_app(settings: Settings) -> FastAPI:
         return {"id": str(item.id), "version": item.version, "content": item.content}
 
     async def mail_assignment(assignment_id: uuid.UUID, *, actor_id: uuid.UUID, action: str) -> str:
-        # Rotate the one-way digest on each send. A failed send is visible and retryable.
-        token = invitation_token()
-        async with db_sessions.begin() as transaction:
-            assignment = await transaction.get(
-                InterviewAssignment, assignment_id, with_for_update=True
-            )
-            if (
-                assignment is None
-                or assignment.status != "assigned"
-                or assignment.latest_start_at <= now()
-            ):
-                raise HTTPException(409, "Only an unstarted assignment can be invited")
-            assignment.invitation_digest = token_digest(token)
-            assignment.invitation_expires_at = assignment.latest_start_at
-            assignment.mail_status = "sending"
-            assignment.updated_at = now()
-            transaction.add(
-                AssignmentAudit(
-                    assignment_id=assignment.id,
-                    actor_id=actor_id,
-                    action=action,
-                    occurred_at=now(),
-                    detail={"mail_status": "sending"},
-                )
-            )
-        async with db_sessions() as db:
-            assignment = await db.get(InterviewAssignment, assignment_id)
-            version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
-            content = BlueprintContent.model_validate(version.content)
         try:
-            await accounts.mailer.send_invitation(
-                assignment.candidate_email,
-                token,
-                title=content.title,
-                scheduled_at=assignment.scheduled_start_at,
-                latest_at=assignment.latest_start_at,
-                timezone=assignment.timezone,
-                target_minutes=content.target_minutes,
+            return await send_invitation(
+                db_sessions, accounts.mailer, assignment_id, actor_id=actor_id, action=action
             )
-            status = "sent"
-        except MailDeliveryError:
-            status = "failed"
-        async with db_sessions.begin() as transaction:
-            current = await transaction.get(
-                InterviewAssignment, assignment_id, with_for_update=True
-            )
-            if current.invitation_digest == token_digest(token):
-                current.mail_status = status
-                transaction.add(
-                    AssignmentAudit(
-                        assignment_id=assignment_id,
-                        actor_id=actor_id,
-                        action="mail_result",
-                        occurred_at=now(),
-                        detail={"mail_status": status},
-                    )
-                )
-        return status
+        except InvitationUnavailable:
+            raise HTTPException(409, "Only an unstarted assignment can be invited") from None
 
     @app.get("/api/admin/assignments")
     async def list_assignments(request: Request, db: Db) -> list[dict]:
@@ -459,13 +457,38 @@ def create_app(settings: Settings) -> FastAPI:
                 .limit(100)
             )
         ).all()
+        # The most recent change request per assignment, so the board can show its progress.
+        latest_revision: dict[uuid.UUID, InterviewJob] = {}
+        if rows:
+            for job in await db.scalars(
+                select(InterviewJob)
+                .where(
+                    InterviewJob.kind == "revise",
+                    InterviewJob.assignment_id.in_([item.id for item in rows]),
+                )
+                .order_by(InterviewJob.created_at.desc())
+            ):
+                latest_revision.setdefault(job.assignment_id, job)
         return [
             {
                 "id": str(item.id),
+                "blueprint_version_id": str(item.blueprint_version_id)
+                if item.blueprint_version_id
+                else None,
+                "revision": (
+                    {
+                        "status": latest_revision[item.id].status,
+                        "error": latest_revision[item.id].last_error,
+                    }
+                    if item.id in latest_revision
+                    else None
+                ),
                 "candidate_email": item.candidate_email,
                 "candidate_name": item.candidate_name,
                 "status": item.status,
                 "mail_status": item.mail_status,
+                "preparation_status": item.preparation_status,
+                "preparation_error": item.preparation_error,
                 "scheduled_start_at": item.scheduled_start_at.astimezone(
                     ZoneInfo(item.timezone)
                 ).isoformat(),
@@ -483,9 +506,33 @@ def create_app(settings: Settings) -> FastAPI:
         item = await db.get(InterviewAssignment, assignment_id)
         if item is None:
             raise HTTPException(404, "Assignment not found")
+        prep = await db.scalar(
+            select(InterviewPreparation).where(InterviewPreparation.assignment_id == item.id)
+        )
+        jobs = (
+            await db.scalars(
+                select(InterviewJob)
+                .where(InterviewJob.assignment_id == item.id)
+                .order_by(InterviewJob.created_at.desc())
+                .limit(20)
+            )
+        ).all()
+        versions: list[BlueprintVersion] = []
+        if prep is not None and prep.blueprint_id is not None:
+            versions = list(
+                (
+                    await db.scalars(
+                        select(BlueprintVersion)
+                        .where(BlueprintVersion.blueprint_id == prep.blueprint_id)
+                        .order_by(BlueprintVersion.version)
+                    )
+                ).all()
+            )
         return {
             "id": str(item.id),
-            "blueprint_version_id": str(item.blueprint_version_id),
+            "blueprint_version_id": str(item.blueprint_version_id)
+            if item.blueprint_version_id
+            else None,
             "candidate_email": item.candidate_email,
             "candidate_name": item.candidate_name,
             "focus_areas": item.adjustments.get("focus_areas", []),
@@ -497,7 +544,202 @@ def create_app(settings: Settings) -> FastAPI:
             "timezone": item.timezone,
             "status": item.status,
             "mail_status": item.mail_status,
+            "preparation_status": item.preparation_status,
+            "preparation_error": item.preparation_error,
+            "target_minutes": item.target_minutes,
+            # Inputs are described, never returned: the résumé and instructions stay private.
+            "preparation": None
+            if prep is None
+            else {
+                "resume_filename": prep.resume_filename,
+                "job_description_source": prep.jd_source,
+                "job_description_filename": prep.jd_filename,
+                "has_private_instructions": bool(prep.interviewer_instructions),
+            },
+            "plan_versions": [
+                {"id": str(v.id), "version": v.version, "published_at": v.published_at.isoformat()}
+                for v in versions
+            ],
+            "jobs": [
+                {
+                    "kind": job.kind,
+                    "status": job.status,
+                    "attempts": job.attempts,
+                    "max_attempts": job.max_attempts,
+                    "error": job.last_error,
+                    "updated_at": job.updated_at.isoformat(),
+                }
+                for job in jobs
+            ],
         }
+
+    class RevisionPayload(BaseModel):
+        request: str = Field(min_length=3, max_length=MAX_REVISION_REQUEST)
+
+    @app.post("/api/admin/assignments/{assignment_id}/revise", status_code=202)
+    async def revise_plan(
+        assignment_id: uuid.UUID, payload: RevisionPayload, request: Request, db: Db
+    ) -> dict:
+        admin = await require_admin(request, db)
+        accounts.check_csrf(request)
+        await accounts.rate_limit(db, "plan-revise", str(assignment_id), limit=10, seconds=3600)
+        text = " ".join(payload.request.split())
+        try:
+            async with db_sessions.begin() as transaction:
+                item = await transaction.get(
+                    InterviewAssignment, assignment_id, with_for_update=True
+                )
+                if item is None or item.status != "assigned":
+                    raise HTTPException(409, "Only an unstarted interview can be changed")
+                if item.preparation_status != "ready" or item.blueprint_version_id is None:
+                    raise HTTPException(409, "The plan must be ready before requesting changes")
+                await enqueue(
+                    transaction,
+                    assignment_id=item.id,
+                    kind="revise",
+                    created_by=admin.id,
+                    payload={"request": text, "base_version_id": str(item.blueprint_version_id)},
+                )
+                transaction.add(
+                    AssignmentAudit(
+                        assignment_id=item.id,
+                        actor_id=admin.id,
+                        action="revision_requested",
+                        occurred_at=now(),
+                        detail={},
+                    )
+                )
+                await transaction.flush()
+        except IntegrityError:
+            raise HTTPException(409, "A change is already being applied") from None
+        runner.wake()
+        return {"status": "queued"}
+
+    @app.post("/api/admin/assignments/{assignment_id}/retry-preparation", status_code=202)
+    async def retry_preparation(assignment_id: uuid.UUID, request: Request, db: Db) -> dict:
+        admin = await require_admin(request, db)
+        accounts.check_csrf(request)
+        try:
+            async with db_sessions.begin() as transaction:
+                item = await transaction.get(
+                    InterviewAssignment, assignment_id, with_for_update=True
+                )
+                if (
+                    item is None
+                    or item.status != "assigned"
+                    or item.preparation_status != "failed"
+                    or item.blueprint_version_id is not None
+                ):
+                    raise HTTPException(409, "Preparation can only be retried after it fails")
+                item.preparation_status = "pending"
+                item.preparation_error = None
+                item.updated_at = now()
+                await enqueue(
+                    transaction, assignment_id=item.id, kind="prepare", created_by=admin.id
+                )
+                transaction.add(
+                    AssignmentAudit(
+                        assignment_id=item.id,
+                        actor_id=admin.id,
+                        action="preparation_retried",
+                        occurred_at=now(),
+                        detail={},
+                    )
+                )
+                await transaction.flush()
+        except IntegrityError:
+            raise HTTPException(409, "Preparation is already queued") from None
+        runner.wake()
+        return {"status": "queued"}
+
+    @app.get("/admin/schedule")
+    async def schedule_page(request: Request, db: Db) -> Response:
+        user = await accounts.current_user(request, db)
+        if not user:
+            return sign_in_redirect(request)
+        if not user.is_superuser:
+            raise HTTPException(403, "Administrator access required")
+        return page("schedule.html")
+
+    async def read_schedule_form(request: Request):
+        """Read the multipart body with a hard byte cap, then parse it."""
+        if request.headers.get("content-type", "").split(";", 1)[0] != "multipart/form-data":
+            raise HTTPException(415, "Submit the schedule form as multipart form data")
+        declared = request.headers.get("content-length", "")
+        if declared.isdecimal() and int(declared) > MAX_FORM_BYTES:
+            raise HTTPException(413, "The upload is too large")
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_FORM_BYTES:
+                raise HTTPException(413, "The upload is too large")
+        sent = False
+
+        async def replay() -> dict:
+            nonlocal sent
+            if sent:
+                return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+        return await Request(request.scope, replay).form(max_files=2, max_fields=20)
+
+    async def upload_of(form, name: str) -> Upload | None:
+        item = form.get(name)
+        if item is None or isinstance(item, str) or not getattr(item, "filename", ""):
+            return None
+        data = await item.read(MAX_DOCUMENT_BYTES + 1)
+        return Upload(item.filename, data)
+
+    @app.post("/api/admin/schedule")
+    async def schedule(request: Request, db: Db) -> Response:
+        admin = await require_admin(request, db)
+        accounts.check_csrf(request)
+        await accounts.rate_limit(db, "schedule", str(admin.id), limit=60, seconds=3600)
+        form = await read_schedule_form(request)
+        names = (
+            "candidate_name",
+            "candidate_email",
+            "interviewer_instructions",
+            "job_description_text",
+            "scheduled_local",
+            "timezone",
+            "target_minutes",
+            "join_window_minutes",
+            "idempotency_key",
+        )
+        raw = {name: form.get(name) for name in names if isinstance(form.get(name), str)}
+        try:
+            fields = parse_fields(raw)
+            result = await schedule_interview(
+                db_sessions,
+                settings.document_dir,
+                admin_id=admin.id,
+                fields=fields,
+                resume=await upload_of(form, "resume"),
+                job_file=await upload_of(form, "job_description_file"),
+            )
+        except ScheduleRejected as exc:
+            return JSONResponse({"detail": exc.errors}, status_code=422)
+        except IdempotencyConflict:
+            return JSONResponse(
+                {
+                    "detail": [
+                        {
+                            "field": "form",
+                            "message": "This form was already submitted with different content. "
+                            "Reload the page to schedule another interview.",
+                        }
+                    ]
+                },
+                status_code=409,
+            )
+        if result.created:
+            runner.wake()
+        return JSONResponse(
+            {"assignment_id": str(result.assignment_id), "created": result.created},
+            status_code=201 if result.created else 200,
+        )
 
     @app.post("/api/admin/assignments/{assignment_id}/cancel")
     async def cancel_assignment(assignment_id: uuid.UUID, request: Request, db: Db) -> dict:
@@ -564,6 +806,10 @@ def create_app(settings: Settings) -> FastAPI:
         if admin:
             data["pdf_status"] = record.pdf_status
             data["pdf_error"] = record.pdf_error
+            data["coverage"] = record.coverage_summary
+            data["plan_version_id"] = (
+                str(record.blueprint_version_id) if record.blueprint_version_id else None
+            )
         return data
 
     async def list_records(
@@ -857,15 +1103,11 @@ def create_app(settings: Settings) -> FastAPI:
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail="Invalid WebRTC offer") from exc
 
-        version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
-        if version is None:
-            raise HTTPException(409, "The assigned interview plan is unavailable")
         try:
-            record_id = await store.create_assignment_attempt(
-                assignment.id, build_id, prompt_version
-            )
+            attempt = await store.create_assignment_attempt(assignment.id, build_id, prompt_version)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
+        record_id = attempt.record_id
 
         async def connected(connection: object) -> None:
             live = LiveSession(
@@ -876,9 +1118,9 @@ def create_app(settings: Settings) -> FastAPI:
                 session_id=str(record_id),
                 event_sink=store.enqueue,
                 interview_plan={
-                    **version.content,
+                    **attempt.plan,
                     "candidate_focus_areas": assignment.adjustments.get("focus_areas", []),
-                    "blueprint_version_id": str(version.id),
+                    "blueprint_version_id": str(attempt.version_id),
                 },
                 self_reported_name=assignment.self_reported_name,
             )
