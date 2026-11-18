@@ -21,7 +21,7 @@ from rehearse_ai.interview_store import InterviewStore
 from rehearse_ai.session import InterviewSession
 from rehearse_ai.session_log import SessionLog
 
-CLOSING = "Thank you for your time. The hiring team will share any updates directly."
+CLOSING = "That concludes the interview. Thank you for your time, Nyla."
 
 
 def timed_plan(minutes: int = 10) -> dict:
@@ -236,8 +236,7 @@ async def test_exhausted_budget_closes_after_the_turn_finishes_without_cutting_i
     assert not [kind for kind, _ in h.calls if kind == "assigned_decision"]  # no further probing
     assert h.events("inference_skipped_budget_exhausted")
     assert h.spoken[-1].text == CLOSING
-    closing_payload = [payload for kind, payload in h.calls if kind == "assigned_closing"][0]
-    assert closing_payload["ended_for_time"] is True
+    assert not [kind for kind, _ in h.calls if kind == "assigned_closing"]  # fixed text
     h.pump()
     summary = h.events("coverage_summary")[-1]["summary"]
     assert summary["end_reason"] == "time_budget" and summary["ended_for_time"] is True

@@ -51,3 +51,21 @@ Not established: whether any words were genuinely misrecognised. The log holds o
 - Whether the 1.10 s turn pause should change. It was deliberately not changed: shortening it would worsen the premature completions seen here.
 - Echo: speakers feeding the microphone can create phantom interruptions. Use headphones for the first test.
 - Streaming or speculative decisions, provider changes and retries were not introduced; none is supported by this evidence.
+
+
+## Conversational controls (second real session)
+
+A real Conversation PDF and its local event log (structure and timings only reviewed; nothing reproduced here) showed control requests being treated as answers. **Causes established from the log and the code:**
+
+1. **Repeat was not recognised** in forms like "repeat the question again" or "repeat it", so those turns went to the model. Twice the model proposed a follow-up that failed validation, and the *fallback advance* silently moved to the next question. That produced the duplicate-detection question and an unasked question 4.
+2. **"I'm done with the interview"** failed the stop matcher, which accepted only a bare "I'm done". The feedback refusal then won and the interview continued.
+3. **Restart and go-back had no handler**, so the model chose to advance.
+4. **"I don't know" had no handler**, so it was probed again.
+5. **No authoritative pending prompt.** Repeats used the last *delivered* prompt, so a follow-up that was prepared but interrupted could not be repeated; control replies could also be treated as answers when interrupted.
+6. **The closing was model-written** and promised contact.
+
+**Changes** (routing and controller state, not prompts): `controls.py` classifies clear controls clause by clause with explicit priority (finish, then going back, repeat, not understood, feedback, process questions, not knowing); the controller holds the pending prompt, knows whether it was delivered, bounds repeats (two) and ends with an explicit, non-advancing recovery; control replies never spend a probe, mark coverage or advance, and a run of detours returns to the prompt; "I don't know", "I haven't used it" and refusals are recorded as the answer (coverage lists them) and advance without a model call; closings are fixed text for normal, early and time-limited endings. Mid-turn end detection uses the same classifier.
+
+**Measured:** only synthetic regressions (see the test list in `tests/test_assigned_controls.py`) and the mutation checks that show they fail when each behaviour is disabled. One bounded real-model run confirmed the edited decision prompt still returns valid decisions (median 1.10 s over 10 calls; run-to-run variation is larger than any change). **No microphone or acoustic verification.**
+
+**Remaining uncertainty:** how often real speech and real STT produce control phrasings not yet recognised (they fall through to the model, as before, and a rejected follow-up still advances); whether two repeats and three detours are the right bounds; "I don't understand" repeats rather than rephrases; the "yes" that confirms ending is accepted only immediately after the clarification; mixed answers that contain a gap clause are never probed further, even when the useful part would justify it.

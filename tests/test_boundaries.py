@@ -210,7 +210,7 @@ async def test_decision_context_excludes_future_questions_and_private_plan_field
         "required",
     }
     assert "assigned_interview" not in data and "active_question_plan" not in data
-    # Drive to the closing: it gets the closing instructions, still no private plan fields.
+    # Drive to the closing. It is fixed text, so no model sees the plan's closing notes.
     deliver(session)
     await session.user_started()
     await session.user_stopped("We retried with idempotent workers.")
@@ -219,8 +219,8 @@ async def test_decision_context_excludes_future_questions_and_private_plan_field
     await session.user_started()
     await session.user_stopped("I pair with them weekly.")
     await settle()
-    closing = [text for kind, text in payloads if kind == "assigned_closing"]
-    assert closing and "CLOSING-INSTRUCTION-TEXT" in closing[0]
+    assert not [text for kind, text in payloads if kind == "assigned_closing"]
+    assert all("CLOSING-INSTRUCTION-TEXT" not in text for _, text in payloads)
     for _, text in payloads:
         data = json.loads(text)
         current = (data.get("current_question") or {}).get("question_number")

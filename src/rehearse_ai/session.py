@@ -15,6 +15,16 @@ from rehearse_ai.budget import (
     question_seconds,
     skip_for_time,
 )
+from rehearse_ai.controls import (
+    END_CLAUSE as _END_CLAUSE,
+)
+from rehearse_ai.controls import (
+    WITHDRAW_CLAUSE as _WITHDRAW_CLAUSE,
+)
+from rehearse_ai.controls import (
+    Intent,
+    interpret,
+)
 from rehearse_ai.interview import (
     QUESTIONS,
     InterviewController,
@@ -43,6 +53,34 @@ _FLOOR_CONTROL = re.compile(
     r"carry on|hold on|wait|one second|just a second|never mind|cut|cut in|cut it)[,.!?\s]*){1,5}$",
     re.I,
 )
+# Spoken text for assigned-interview controls. Fixed on purpose: nothing here comes from a model, so
+# none of it can invent a contact, a policy or a promise about the outcome.
+FEEDBACK_DECLINED = (
+    "I can't provide interview feedback. "
+    "Whenever you're ready, you can answer, or ask me to repeat the question."
+)
+RESTART_UNAVAILABLE = (
+    "I can't restart the interview or go back to an earlier question in this session. "
+    "I can repeat the current question, or we can end the interview."
+)
+FINISH_CLARIFICATION = (
+    "Would you like to end the interview, or are you finished with this question?"
+)
+REPEAT_EXHAUSTED = (
+    "I've already repeated that. You can answer as best you can, tell me you don't know, "
+    "or ask to end the interview."
+)
+OUTCOME_UNKNOWN = (
+    "I don't have any information about hiring decisions, contacts or next steps. "
+    "I can repeat the question, or we can end the interview."
+)
+OFF_TOPIC_REPLY = (
+    "Let's stay with the interview. You can answer the current question or ask me to repeat it."
+)
+# A plain "yes" is only taken as agreement when it answers the end-of-interview clarification.
+_AFFIRM = re.compile(
+    r"(?:yes|yeah|yep|sure|please do|yes please|end it|that's right|correct)[\s.!,]*", re.I
+)
 OPENING_REPLY_WAIT_SECS = 12.0
 OPENING_ACK_TIMEOUT_SECS = 4.0
 _OPENING_KINDS = {UtteranceKind.GREETING, UtteranceKind.OPENING_ACK}
@@ -60,11 +98,6 @@ _REPEAT = re.compile(
     re.IGNORECASE,
 )
 _SKIP = re.compile(r"^(?:please\s+)?(?:skip(?: this question)?|next question)\??[.!]?$", re.I)
-_FEEDBACK_REQUEST = re.compile(
-    r"\b(?:can|could|may|would|please|give|share|want|like|tell)\b.{0,80}\bfeedback\b"
-    r"|\bfeedback\b.{0,40}\?",
-    re.I,
-)
 _CORRECTION = re.compile(
     r"^\s*(?:(?:actually|sorry)\s*[, ]\s*)?"
     r"(?P<cue>it's|it is|i said|i meant|i used|my name is)\s+"
@@ -101,29 +134,7 @@ def _parse_correction(text: str) -> _CorrectionRequest | None:
     return None
 
 
-_END_CLAUSE = re.compile(
-    r"(?:please\s+)?(?:"
-    r"(?:can|could|may|would)\s+(?:i|we|you)\s+"
-    r"|(?:i|we)\s+(?:want|would like|need)\s+(?:you\s+)?to\s+"
-    r"|(?:i'd|we'd)\s+like\s+to\s+"
-    r"|want\s+you\s+to\s+"
-    r"|let's\s+"
-    r")?"
-    r"(?:end|stop|finish|quit|exit|wrap up)"
-    r"(?:\s+(?:(?:the|this|our)\s+)?(?:interview|session|practice)"
-    r"|\s+(?:now|here|it))?"
-    r"(?:\s+right\s+now|\s+please)?",
-    re.I,
-)
 _DONE_CLAUSE = re.compile(r"(?:i'm|i am|we're|we are)\s+(?:done|finished)", re.I)
-_WITHDRAW_CLAUSE = re.compile(
-    r"(?:i|we)\s+(?:don't|do not|dont)\s+want\s+to\s+"
-    r"(?:proceed|continue|go on|carry on|keep going)"
-    r"(?:\s+(?:further|anymore|now|with (?:this|the) (?:interview|session|practice)))?",
-    re.I,
-)
-
-
 _DEFER_READINESS = re.compile(
     r"\b(?:not (?:ready|yet|now)|do not (?:start|begin)|do not want to"
     r"|give me (?:a |one )?(?:moment|minute|second)|need (?:a |one )?(?:moment|minute|second)"
@@ -428,10 +439,12 @@ class InterviewSession:
         self._marks: dict[str, float] = {}
         self._output_started_at: dict[int, float] = {}
         self._closing_replays = 0
+        self._finish_clarified = False
         self._opening = bool(opening and interview_plan)
         self._opening_wait_secs = opening_wait_secs
         self._opening_task: asyncio.Task[None] | None = None
         self._opening_seconds: int | None = None
+        self._first_name_confirmed = self._first_name(self_reported_name)
         self._greeting = self._greeting_for(self_reported_name)
         self._target_seconds = (
             int(interview_plan.get("target_minutes", 0)) * 60 if interview_plan else 0
@@ -572,15 +585,30 @@ class InterviewSession:
             self._start_response()
 
     @staticmethod
-    def _greeting_for(self_reported_name: str | None) -> str:
-        """Greet by the name the candidate confirmed. It is data in a template, never a prompt."""
-        first = ""
-        if self_reported_name:
-            token = self_reported_name.split()[0] if self_reported_name.split() else ""
-            match = _NAME_TOKEN.fullmatch(token)
-            if match and len(token) <= 30:
-                first = token
+    def _first_name(name: str | None) -> str:
+        """The first name to address, from the confirmed name. Plain data: never put in a prompt."""
+        token = name.split()[0] if name and name.split() else ""
+        return token if token and len(token) <= 30 and _NAME_TOKEN.fullmatch(token) else ""
+
+    def _greeting_for(self, self_reported_name: str | None) -> str:
+        first = self._first_name(self_reported_name)
         return f"Hi {first}, how's your day going?" if first else "Hi, how's your day going?"
+
+    def _address_name(self) -> str:
+        """Who to address in closings: a spoken correction wins over the confirmed name."""
+        return self._first_name(self.controller.preferred_name) or self._first_name_confirmed
+
+    def _closing_text(self) -> str:
+        name = self._address_name()
+        return (
+            f"That concludes the interview. Thank you for your time{', ' + name if name else ''}."
+        )
+
+    def _early_closing_text(self) -> str:
+        name = self._address_name()
+        return (
+            f"Thank you for your time{', ' + name if name else ''}. We'll end the interview here."
+        )
 
     def _cancel_opening_timer(self) -> None:
         task, self._opening_task = self._opening_task, None
@@ -634,7 +662,7 @@ class InterviewSession:
             if not answer:
                 self._arm_opening_timer()
                 return
-            if _is_sentence_request(_REPEAT, answer):
+            if interpret(answer).kind == "repeat":
                 try:
                     await self._queue_speech(controller.request_opening_repeat())
                     return
@@ -1072,6 +1100,14 @@ class InterviewSession:
         await self.user_started()
         await self.user_stopped(text, segment_count=1, boundary_frame_id=boundary_frame_id)
 
+    def _is_finish_request(self, text: str) -> bool:
+        """A clear request to end. Assigned interviews use the shared control classifier, where
+        ending outranks feedback or anything else in the same turn; "I'm done" alone is ambiguous
+        and is clarified instead."""
+        if self._assigned_plan is not None:
+            return interpret(text).kind == "finish"
+        return _is_stop_request(text)
+
     async def detect_stop_from_segments(self, text: str) -> bool:
         if (
             self._closed
@@ -1085,7 +1121,7 @@ class InterviewSession:
             }
         ):
             return False
-        if not _is_stop_request(text):
+        if not self._is_finish_request(text):
             return False
         await self._end_early(text, defer_closing=True)
         return True
@@ -1258,7 +1294,7 @@ class InterviewSession:
             configured_pause_secs=self._turn_pause_secs,
         )
         self._turn_started_at = None
-        if not self._stop_latched and _is_stop_request(answer):
+        if not self._stop_latched and self._is_finish_request(answer):
             await self._end_early(answer)
             return
 
@@ -1605,9 +1641,7 @@ class InterviewSession:
         if self._stop_latched:
             if self.controller.stage is Stage.EARLY_CLOSING:
                 await self._queue_speech(
-                    self.controller.prepare_early_feedback(
-                        "Thank you for your time. We'll end the interview here."
-                    )
+                    self.controller.prepare_early_feedback(self._early_closing_text())
                 )
             return
         interrupted = self.controller.interrupted_utterance
@@ -1616,27 +1650,14 @@ class InterviewSession:
         ):
             await self._route_assigned_opening(answer, interrupted)
             return
-        if _FEEDBACK_REQUEST.search(answer):
-            unheard = interrupted is not None and self._interrupted_output_id != interrupted.id
-            await self._queue_speech(
-                self.controller.prepare_information(
-                    "I can't provide interview feedback. "
-                    "The hiring team will share any updates directly.",
-                    repeat_unheard=unheard,
-                )
-            )
-            self._record("feedback_request_declined", speaker="candidate")
-            return
-        if _is_sentence_request(_REPEAT, answer):
-            if interrupted:
-                await self._queue_speech(self.controller.retry_interrupted())
-            elif self.controller.stage in {Stage.AWAITING_ANSWER, Stage.AWAITING_PROPOSAL}:
-                try:
-                    await self._queue_speech(
-                        self.controller.request_repeat(self._last_project_prompt)
-                    )
-                except LimitReached:
-                    self._record("clarification_limit", speaker=None)
+        if self._finish_clarified:
+            # The last thing said was "end the interview, or finished with this question?"
+            self._finish_clarified = False
+            if _AFFIRM.fullmatch(answer.strip()):
+                await self._end_early(answer)
+                return
+        intent = interpret(answer)
+        if intent.is_control and await self._route_assigned_control(intent, answer, interrupted):
             return
         if _is_sentence_request(_SKIP, answer):
             self._apply_time_budget()
@@ -1648,11 +1669,9 @@ class InterviewSession:
                 )
             except InvalidTransition:
                 self._record("required_question_skipped", speaker="candidate")
-                await self._queue_speech(
-                    self.controller.prepare_information(
-                        "This question is part of the interview. "
-                        "If you prefer not to answer, you can say so."
-                    )
+                await self._control_reply(
+                    "This question is part of the interview. "
+                    "If you prefer not to answer, you can say so."
                 )
                 return
             self._record("candidate_skipped_question", speaker="candidate")
@@ -1711,6 +1730,116 @@ class InterviewSession:
                 self.controller.add_answer_continuation(answer)
                 self._latest_candidate_turn = answer
                 self._start_response()
+
+    # --- Assigned-interview controls ---------------------------------------------------
+
+    async def _control_reply(self, text: str) -> None:
+        """A short reply to a control or detour. The pending prompt is untouched and returns.
+
+        After several replies in a row with no answer, the interviewer stops answering detours and
+        returns to the prompt itself, so the conversation cannot loop on side requests.
+        """
+        if self.controller.note_control_detour():
+            self._record("control_detour_limit", speaker=None)
+            await self._repeat_pending(count_detour=False)
+            return
+        await self._queue_speech(self.controller.prepare_control_reply(text))
+
+    async def _repeat_pending(self, *, count_detour: bool = True) -> None:
+        """Repeat the authoritative pending prompt; say so plainly when the allowance is used."""
+        utterance = self.controller.repeat_pending()
+        if utterance is None:
+            self._record("repeat_limit_reached", speaker=None)
+            await self._queue_speech(self.controller.prepare_control_reply(REPEAT_EXHAUSTED))
+            return
+        self._record("repeat_requested", speaker="candidate", utterance_id=utterance.id)
+        await self._queue_speech(utterance)
+
+    def _progress_reply(self) -> str:
+        plan = self._assigned_plan or {}
+        total = len(plan.get("questions", []))
+        number = (
+            self.controller.pending_prompt.question_number
+            if self.controller.pending_prompt
+            else None
+        )
+        minutes = plan.get("target_minutes")
+        facts = f"There are {total} questions in this interview"
+        if number:
+            facts += f", and this is number {number}"
+        if minutes:
+            facts += f". About {minutes} minutes are planned"
+        return f"{facts}. I can repeat the question whenever you like."
+
+    async def _route_assigned_control(
+        self, intent: Intent, answer: str, interrupted: Utterance | None
+    ) -> bool:
+        """Handle a clear control. Returns False when the turn should be treated as speech.
+
+        A control is never an answer: it does not spend a probe, mark coverage or advance. The one
+        exception is "I don't know" and its relatives, which *are* the candidate's answer.
+        """
+        controller = self.controller
+        prompt = controller.pending_prompt
+        if prompt is None:
+            return False
+        heard = controller.pending_prompt_delivered or (
+            interrupted is not None
+            and interrupted.id == prompt.id
+            and self._interrupted_output_id == interrupted.id
+        )
+        kind = intent.kind
+        self._record(
+            "control_recognised", speaker="candidate", control=kind, gap=intent.gap or None
+        )
+        if kind == "finish":
+            await self._end_early(answer)
+        elif kind == "finish_unclear":
+            self._finish_clarified = True
+            await self._control_reply(FINISH_CLARIFICATION)
+        elif kind in {"restart", "back"}:
+            self._record("restart_declined", speaker=None, control=kind)
+            await self._control_reply(RESTART_UNAVAILABLE)
+        elif kind == "repeat" or (kind == "not_understood") or (kind == "gap" and not heard):
+            # An unheard prompt cannot be answered or declined; and "I don't understand" is a
+            # request to hear it again, not an admission that the candidate does not know.
+            await self._repeat_pending()
+        elif kind == "feedback":
+            self._record("feedback_request_declined", speaker="candidate")
+            await self._control_reply(FEEDBACK_DECLINED)
+        elif kind == "outcome":
+            await self._control_reply(OUTCOME_UNKNOWN)
+        elif kind == "progress":
+            await self._control_reply(self._progress_reply())
+        elif kind == "gap":
+            await self._record_gap_and_advance(intent, answer)
+        else:
+            return False
+        return True
+
+    async def _record_gap_and_advance(self, intent: Intent, answer: str) -> None:
+        """ "I don't know", "I haven't used it" and refusals are answers: keep them, move on.
+
+        The whole turn is stored as spoken, so a mixed answer ("I haven't used Kafka, but I used
+        Airflow...") keeps its useful part and still says nothing about Kafka. Nothing asks again
+        for the same detail.
+        """
+        self.controller.record_gap_answer(answer)
+        self._interrupted_output_id = None
+        self._latest_candidate_turn = answer
+        self._record(
+            "candidate_gap_recorded",
+            speaker="candidate",
+            gap=intent.gap,
+            subject=intent.subject or None,
+            mixed=len(intent.residual.split()) >= 3,
+        )
+        self._apply_time_budget()
+        following = self.controller.propose(ReplyKind.ADVANCE)
+        if following:
+            await self._queue_speech(following)
+        else:
+            self._start_response()
 
     # --- Assigned-interview context, budget and response -------------------------------
 
@@ -1782,7 +1911,7 @@ class InterviewSession:
             },
         )
 
-    def _assigned_payload(self, *, closing: bool = False) -> dict[str, Any]:
+    def _assigned_payload(self) -> dict[str, Any]:
         """The bounded context a single assigned decision needs.
 
         Deliberately excluded: the full plan, future question text and guidance,
@@ -1801,10 +1930,8 @@ class InterviewSession:
             "purpose": plan.get("purpose", ""),
             "interviewer_style": plan.get("interviewer_style", ""),
         }
-        if closing:
-            context["closing_instructions"] = plan.get("closing_instructions", "")
         current = None
-        if number and not closing:
+        if number:
             item = questions[number - 1]
             current = {
                 "question_number": number,
@@ -1817,7 +1944,7 @@ class InterviewSession:
         latest = self._latest_candidate_turn
         before = list(self._answer_snapshot or ())
         return {
-            "phase": "closing" if closing else "interview",
+            "phase": "interview",
             "interview_context": context,
             "candidate_focus_areas": list(plan.get("candidate_focus_areas", []))[:8],
             "current_question": current,
@@ -1859,47 +1986,11 @@ class InterviewSession:
             await self._respond_opening_ack(generation)
             return
         if self.controller.stage is Stage.AWAITING_FEEDBACK:
-            # This stage is reused as a terminal closing gate; no feedback is generated.
-            self._record(
-                "inference_started",
-                speaker=None,
-                generation=generation,
-                purpose="assigned_closing",
-                llm_first_token_ms=None,
-            )
-            try:
-                self._mark("decision_start")
-                result = await self._infer("assigned_closing", self._assigned_payload(closing=True))
-                self._mark("decision_done")
-                text = result.get("text")
-                if (
-                    not isinstance(text, str)
-                    or not text.strip()
-                    or len(text) > 300
-                    or "?" in text
-                    or re.search(r"\b(?:strength|weakness|score|feedback|improve)\b", text, re.I)
-                ):
-                    raise ValueError("Invalid closing speech")
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._record(
-                    "response_error",
-                    speaker=None,
-                    generation=generation,
-                    error_type=type(exc).__name__,
-                    failure_stage="closing_inference",
-                )
-                text = "Thank you for your time. That concludes the interview."
+            # This stage is the terminal closing gate. The closing is fixed text: brief, neutral and
+            # free of promises, so no model can add feedback, an outcome or a contact.
+            self._record("closing_prepared", speaker=None, generation=generation, fixed_text=True)
             if generation == self._generation and not self._closed:
-                self._record(
-                    "inference_completed",
-                    speaker=None,
-                    generation=generation,
-                    purpose="assigned_closing",
-                    validated=True,
-                )
-                await self._queue_speech(self.controller.prepare_closing(text))
+                await self._queue_speech(self.controller.prepare_closing(self._closing_text()))
             return
         if self.controller.stage is not Stage.AWAITING_PROPOSAL:
             return
@@ -1975,18 +2066,12 @@ class InterviewSession:
             ):
                 self.controller.restore_answers(self._answer_snapshot)
             reply = {
-                "feedback_request": (
-                    "I can't provide interview feedback. "
-                    "The hiring team will share any updates directly."
-                ),
-                "off_topic": (
-                    "Let's stay with the interview. You can answer the current question "
-                    "or ask me to repeat it."
-                ),
+                "feedback_request": FEEDBACK_DECLINED,
+                "off_topic": OFF_TOPIC_REPLY,
                 "coach_identity": "You can call me RehearseAI.",
             }[action]
             accept()
-            await self._queue_speech(self.controller.prepare_information(reply))
+            await self._control_reply(reply)
             return
         if action == "wait":
             accept()
@@ -2276,9 +2361,7 @@ class InterviewSession:
                 return
             if self._assigned_plan is not None:
                 await self._queue_speech(
-                    self.controller.prepare_early_feedback(
-                        "Thank you for your time. We'll end the interview here."
-                    )
+                    self.controller.prepare_early_feedback(self._early_closing_text())
                 )
                 return
             if reason == "recovery_limit":

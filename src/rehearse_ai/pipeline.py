@@ -389,7 +389,6 @@ def inference_adapter(llm: OpenAILLMService):
             "feedback": FEEDBACK_SCHEMA,
             "early_feedback": FEEDBACK_SCHEMA,
             "assigned_decision": ASSIGNED_DECISION_SCHEMA,
-            "assigned_closing": OPENING_SCHEMA,
         }[kind]
         response = await llm.run_inference(
             LLMContext(messages=[{"role": "user", "content": json.dumps(payload)}]),

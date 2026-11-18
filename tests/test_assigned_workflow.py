@@ -165,8 +165,9 @@ async def test_assigned_questions_feedback_refusal_and_closing(tmp_path):
     await session.user_started()
     await session.user_stopped("We chose simple queues over a broker.")
     await settle()
-    assert spoken[-1].text.startswith("Thank you")
-    assert "feedback" not in kinds
+    assert spoken[-1].text == "That concludes the interview. Thank you for your time, Nyla."
+    assert "hiring" not in spoken[-1].text and "feedback" not in kinds
+    assert "assigned_closing" not in kinds  # the closing is fixed text, never model-written
     assert session.controller.stage is Stage.DELIVERING
     deliver(session)
     assert session.controller.stage is Stage.COMPLETE

@@ -103,6 +103,7 @@ function renderCoverage(coverage) {
     `Asked: ${numbers(coverage.asked)}`,
     `Covered by an earlier answer: ${numbers(coverage.covered_from_prior_turns)}`,
     `Skipped to respect the time budget: ${numbers(coverage.skipped_for_time)}`,
+    `Answered by not knowing or declining: ${numbers(coverage.no_knowledge_or_declined)}`,
     `Required questions not reached: ${numbers(coverage.required_not_reached)}`,
     `Optional questions not reached: ${numbers(coverage.optional_not_reached)}`,
     `Active time ${minutes(coverage.active_seconds || 0)} of a ${minutes(coverage.target_seconds || 0)} target${coverage.paused_seconds ? ` (${minutes(coverage.paused_seconds)} paused, not counted)` : ''}`,

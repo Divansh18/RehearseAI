@@ -1,6 +1,6 @@
 """Provider-independent interview policy and speech delivery state."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 
 from rehearse_ai.memory import SessionMemory
@@ -34,6 +34,12 @@ NO_PROJECT_SCOPE = (
 
 MAX_FOLLOW_UPS_PER_QUESTION = 1
 MAX_CLARIFICATIONS_PER_QUESTION = 1
+# An assigned prompt may be repeated this many times; after that the candidate is told so plainly
+# instead of being silently moved on.
+MAX_REPEATS_PER_PROMPT = 2
+# Consecutive control replies (feedback, restart, process questions) before the interviewer simply
+# returns to the pending prompt rather than answering another detour.
+MAX_CONTROL_DETOURS = 3
 MAX_OPENING_REPEATS = 1
 MAX_PENDING_CHOICE_REPLIES = 2
 
@@ -108,6 +114,16 @@ class Utterance:
     question_number: int | None
 
 
+PROMPT_KINDS = frozenset(
+    {
+        UtteranceKind.QUESTION,
+        UtteranceKind.FOLLOW_UP,
+        UtteranceKind.NUDGE,
+        UtteranceKind.CLARIFICATION,
+    }
+)
+
+
 class InvalidTransition(ValueError):
     """An event is not valid in the current interview stage."""
 
@@ -148,6 +164,11 @@ class InterviewController:
         self._answers: list[list[str]] = [[] for _ in self._questions]
         self._covered_source_turns: list[int | None] = [None] * len(self._questions)
         self._opening_text: str | None = None
+        self._pending_prompt: Utterance | None = None
+        self._prompt_delivered = False
+        self._repeats = [0] * len(self._questions)
+        self._control_detours = 0
+        self._gaps: set[int] = set()
         self._time_skipped: set[int] = set()
         self._delivered_questions: set[int] = set()
         self._closing_remarks: list[str] = []
@@ -279,6 +300,7 @@ class InterviewController:
             "answered": [n for n in numbers if self._answers[n - 1]],
             "covered_from_prior_turns": covered,
             "skipped_for_time": skipped,
+            "no_knowledge_or_declined": sorted(i + 1 for i in self._gaps),
             "required_not_reached": [n for n in unreached if self._required[n - 1]],
             "optional_not_reached": [n for n in unreached if not self._required[n - 1]],
         }
@@ -897,6 +919,84 @@ class InterviewController:
             raise ValueError("Assigned closing must be short and nonempty")
         return self._prepare(UtteranceKind.CLOSING, text.strip(), None)
 
+    @property
+    def pending_prompt(self) -> Utterance | None:
+        """The main question or probe that controls and detours refer to (delivered or not)."""
+        return self._pending_prompt
+
+    @property
+    def pending_prompt_delivered(self) -> bool:
+        return self._prompt_delivered
+
+    def _settle_interrupted(self) -> None:
+        """A control turn supersedes whatever was cut off; the pending prompt is what returns."""
+        self._interrupted = None
+        if self._stage is Stage.DELIVERING and self._pending is None:
+            self._stage = Stage.AWAITING_ANSWER
+
+    def repeat_pending(self) -> Utterance | None:
+        """Say the pending prompt again. ``None`` means the repeat allowance is used up.
+
+        A prompt that was never delivered is simply re-asked, since it was not heard. A repeat
+        spends only the repeat allowance: never a probe or a clarification.
+        """
+        prompt = self._pending_prompt
+        if (
+            not self._assigned
+            or prompt is None
+            or prompt.question_number is None
+            or self._stage not in {Stage.AWAITING_ANSWER, Stage.AWAITING_PROPOSAL, Stage.DELIVERING}
+        ):
+            raise InvalidTransition("There is no pending prompt to repeat")
+        index = prompt.question_number - 1
+        self._settle_interrupted()
+        if not self._prompt_delivered:
+            return self._prepare(prompt.kind, prompt.text, index)
+        if self._repeats[index] >= MAX_REPEATS_PER_PROMPT:
+            return None
+        self._repeats[index] += 1
+        return self._prepare(UtteranceKind.REPEAT, prompt.text, index)
+
+    def note_control_detour(self) -> bool:
+        """Count a control reply. True when the interviewer should return to the prompt instead."""
+        self._control_detours += 1
+        return self._control_detours > MAX_CONTROL_DETOURS
+
+    def prepare_control_reply(self, text: str) -> Utterance:
+        """A short reply to a control or detour; the pending prompt is untouched and returns.
+
+        If the pending prompt was never delivered it is re-asked in the same utterance so that it
+        cannot be lost and the next answer is attributed to the right question.
+        """
+        prompt = self._pending_prompt
+        if not self._assigned or prompt is None or prompt.question_number is None:
+            raise InvalidTransition("No assigned interview question is pending")
+        self._settle_interrupted()
+        if not self._prompt_delivered:
+            combined = self._prepare(
+                prompt.kind, f"{text.strip()} {prompt.text}", prompt.question_number - 1
+            )
+            self._pending_prompt = replace(combined, text=prompt.text)
+            return combined
+        return self._prepare(UtteranceKind.INFORMATION, text.strip(), self._question_index)
+
+    def record_gap_answer(self, text: str) -> None:
+        """Store "I don't know", "I haven't used it" or a refusal as the actual answer.
+
+        The words are the candidate's answer for the question in play, kept as spoken, and the
+        question is marked so coverage can say it was answered by not knowing or declining.
+        """
+        answer = text.strip()
+        if self._interrupted is not None:
+            self.accept_barge_in_answer(answer)
+        elif self._stage is Stage.AWAITING_ANSWER:
+            self.submit_answer(answer)
+        elif self._stage is Stage.AWAITING_PROPOSAL:
+            self.add_answer_continuation(answer)
+        else:
+            raise InvalidTransition("No question is in play")
+        self._gaps.add(self._question_index)
+
     def prepare_information(self, text: str, *, repeat_unheard: bool = False) -> Utterance:
         if not self._assigned or self._stage not in {
             Stage.AWAITING_ANSWER,
@@ -1012,6 +1112,18 @@ class InterviewController:
         if utterance is None or utterance.id != utterance_id:
             return False
         self._pending = None
+        prompt = self._pending_prompt
+        if prompt is not None and utterance.id == prompt.id:
+            self._prompt_delivered = True
+        elif (
+            utterance.kind is UtteranceKind.REPEAT
+            and prompt is not None
+            and utterance.question_number == prompt.question_number
+        ):
+            # A repeat that completes also settles which question the candidate is answering.
+            self._question_index = utterance.question_number - 1
+            if prompt.kind is UtteranceKind.QUESTION:
+                self._delivered_questions.add(self._question_index)
         if utterance.kind is UtteranceKind.GREETING:
             self._stage = Stage.AWAITING_GREETING
         elif utterance.kind in {UtteranceKind.OPENING_ACK, UtteranceKind.NAME_ACK}:
@@ -1161,6 +1273,11 @@ class InterviewController:
         self._next_utterance_id += 1
         self._pending = utterance
         self._stage = Stage.DELIVERING
+        if kind in PROMPT_KINDS and index is not None:
+            # A new main question or probe becomes the prompt that controls refer to.
+            self._pending_prompt = utterance
+            self._prompt_delivered = False
+            self._control_detours = 0
         return utterance
 
     def _require(self, stage: Stage) -> None:

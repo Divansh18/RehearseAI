@@ -11,7 +11,6 @@ def load_prompt(name: str) -> str:
         "opening_ack",
         "tts_style",
         "assigned_decision",
-        "assigned_closing",
         "plan_prepare",
         "plan_revise",
     }:
