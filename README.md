@@ -1,6 +1,6 @@
 # RehearseAI
 
-RehearseAI is a company-facing AI interview platform. An administrator fills in **one Schedule interview form** (candidate, résumé, job description, optional private instructions, date/time/timezone and target duration). The system saves the interview, emails the candidate a private invitation and prepares candidate-specific questions in the background. The candidate joins from the link without an account, confirms their name, acknowledges one camera snapshot, checks devices and takes a conversational voice interview. The AI gives no coaching, feedback, scores or hiring decisions. Administrators download a Conversation PDF (conversation plus one acknowledged camera snapshot).
+RehearseAI is a company-facing AI interview platform. An administrator fills in **one Schedule interview form** (candidate, résumé, job description, optional private instructions, date/time/timezone and target duration). The system saves the interview, emails the candidate a private invitation and prepares candidate-specific questions in the background. The candidate joins from the link without an account, confirms their name, acknowledges that one image of the interview room (including their camera) will be saved, checks devices and takes a conversational voice interview. The AI gives no coaching, feedback, scores or hiring decisions. Administrators download an admin-only Conversation PDF (the full conversation plus that one acknowledged interview-room image; see [below](#conversation-pdf-and-interview-room-image)).
 
 There is no manual question builder. Questions are generated from the documents; an administrator may *optionally* review them and ask for changes in plain language.
 
@@ -17,7 +17,7 @@ test -f .env || cp .env.example .env
 Fill `.env` without committing it: `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `CARTESIA_API_KEY` for the default voice, and a random `REHEARSE_AUTH_SECRET` of at least 32 characters. `DATABASE_URL` selects PostgreSQL; keep development and test databases separate. `REHEARSE_PUBLIC_BASE_URL` must match invitation links and `REHEARSE_INTERVIEWER_NAME` is the company/interviewer display name. `REHEARSE_LLM_MODEL` selects the OpenAI text model used both for plan preparation and the live interview. `.env.example` lists every voice, turn, storage, SMTP, job and server setting. Keys stay server-side.
 
 ```sh
-uv run alembic upgrade head
+uv run alembic upgrade head          # applies 0001-0007 in order; run it again after pulling new migrations
 uv run python -m rehearse_ai.admin --create admin@example.com
 uv run python -m rehearse_ai
 ```
@@ -38,7 +38,7 @@ A submission carries an idempotency key generated when the form loads; double cl
 
 ### Candidate
 
-Candidates open a private link (a GET never redeems it), explicitly continue, and receive a restricted, expiring, revocable HttpOnly session scoped to one assignment. They confirm a self-reported full name, acknowledge the snapshot disclosure, complete camera/microphone/speaker/screen checks and press **Begin**. While preparation is pending the welcome and setup pages work, but **Begin stays unavailable until the server confirms a valid plan is ready**; the page re-checks on its own. The server enforces this when the attempt starts; there is no fallback to generic practice questions.
+Candidates open a private link (a GET never redeems it), explicitly continue, and receive a restricted, expiring, revocable HttpOnly session scoped to one assignment. They confirm a self-reported full name, acknowledge the interview-room image disclosure, complete camera/microphone/speaker/screen checks and press **Begin**. While preparation is pending the welcome and setup pages work, but **Begin stays unavailable until the server confirms a valid plan is ready**; the page re-checks on its own. The server enforces this when the attempt starts; there is no fallback to generic practice questions.
 
 The entered name, email, invitation possession and interview-room image do not establish identity, and a link can be forwarded. Candidate APIs expose only the title, window, duration and readiness state: never the questions, guidance, résumé, job description or instructions.
 
@@ -116,4 +116,4 @@ Each new interview saves **one image of the interview room** (candidate camera o
 
 **Server rules.** Upload is accepted only from the authenticated candidate of that attempt, only while it is in progress and awaiting its single image; a second upload returns `already_saved` and never replaces the first; End or cancellation wins races (409). The server decodes and validates the JPEG (size, dimensions, pixel count per kind), strips metadata by re-encoding, and stores it privately; filenames, ids and kind claims from the browser are not trusted. The image is browser-submitted: it is not identity verification and not tamper-proof evidence.
 
-**Historical records.** Existing records, transcripts, camera-only stills and PDFs are untouched. A still from before this feature is labelled "camera snapshot from before interview-room images were introduced". Regeneration uses only stored evidence. Migration `0007` adds nullable `snapshot_kind`, `utterance_kind` and `question_number` columns (additive; no backfill).
+**Historical records.** Existing records, transcripts, camera-only stills and PDFs are untouched. A still from before this feature is labelled "camera snapshot from before interview-room images were introduced". Regeneration uses only stored evidence, and is offered only after a generation failure; PDFs already generated keep the layout they were built with. Migration `0007` adds nullable `snapshot_kind`, `utterance_kind` and `question_number` columns (additive; no backfill).
