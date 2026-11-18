@@ -40,7 +40,7 @@ A submission carries an idempotency key generated when the form loads; double cl
 
 Candidates open a private link (a GET never redeems it), explicitly continue, and receive a restricted, expiring, revocable HttpOnly session scoped to one assignment. They confirm a self-reported full name, acknowledge the snapshot disclosure, complete camera/microphone/speaker/screen checks and press **Begin**. While preparation is pending the welcome and setup pages work, but **Begin stays unavailable until the server confirms a valid plan is ready**; the page re-checks on its own. The server enforces this when the attempt starts; there is no fallback to generic practice questions.
 
-The entered name, email, invitation possession and camera snapshot do not establish identity, and a link can be forwarded. Candidate APIs expose only the title, window, duration and readiness state: never the questions, guidance, résumé, job description or instructions.
+The entered name, email, invitation possession and interview-room image do not establish identity, and a link can be forwarded. Candidate APIs expose only the title, window, duration and readiness state: never the questions, guidance, résumé, job description or instructions.
 
 ## Architecture
 
@@ -71,7 +71,7 @@ PDF and DOCX only, up to 5 MB, PDFs up to 10 pages, text up to 30,000 (résumé)
 ### Storage and retention limitations (this milestone)
 
 - Uploaded originals are kept in `private_documents/` (mode 0600), and extracted résumé/job-description text, private instructions and generated plans are kept in PostgreSQL **indefinitely**. There is **no automatic deletion, retention schedule, redaction, export or erase-on-request** in this milestone.
-- Camera snapshots (`private_snapshots/`), PDFs (`private_pdfs/`), raw session logs (`sessions/`) and the database are local, unencrypted at rest and not backed up by the application.
+- Interview-room images (`private_snapshots/`; older records may hold a camera-only still), PDFs (`private_pdfs/`), raw session logs (`sessions/`) and the database are local, unencrypted at rest and not backed up by the application.
 - Contents are never written to application logs, but they are stored and sent to the OpenAI, Deepgram and Cartesia services as described. Review those providers' terms and your own legal obligations before using real candidate data.
 
 ### Administrator scope
@@ -99,7 +99,7 @@ PostgreSQL tests need `REHEARSE_TEST_DATABASE_URL` ending in `_test` (Compose cr
 3. Open Mailpit at `http://127.0.0.1:8025` and find the invitation. Confirm it contains the link, the window and duration but no questions or private instructions.
 4. In a **second, separate browser profile** open the link, press Continue, confirm your full name and check devices. If the plan is still preparing, Begin stays disabled until it is ready.
 5. Back in the admin profile choose **Review questions**, then try **Request changes**.
-6. When the window opens, tick the snapshot acknowledgement and press **Begin interview**; answer, interrupt, ask to repeat, ask for feedback (it is refused) and finish or end early.
+6. When the window opens, tick the interview-room image acknowledgement and press **Begin interview**; answer, interrupt, ask to repeat, ask for feedback (it is refused) and finish or end early.
 7. In **Records** open the interview, check the coverage summary and download the PDF.
 
 Real devices and provider keys are required for step 6. Screen capture may be unavailable on mobile.
@@ -107,3 +107,13 @@ Real devices and provider keys are required for step 6. Screen capture may be un
 ## Historical material
 
 The earlier take-home [recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [recorded evidence](evidence/recorded-session/) and [submission checklist](SUBMISSION_CHECKLIST.md) describe the **historical prototype** and are not verification of the current product. Historical practice code and prompts remain only for regression compatibility and cannot be reached through the invitation entry, which requires an assigned plan. See [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md), [PRODUCT_CLEANUP.md](PRODUCT_CLEANUP.md) and [PROMPTS.md](PROMPTS.md).
+
+## Conversation PDF and interview-room image
+
+Each new interview saves **one image of the interview room** (candidate camera on the left, the RehearseAI panel, current question/status and room controls on the right, at the room's real proportions) and an admin-only **Conversation PDF** that contains it. Admins use **Download Conversation PDF** and, after a failure, **Regenerate Conversation PDF**. Candidates cannot download PDFs or read any image.
+
+**How the image is made, and its limits.** It is *not* an operating-system screenshot. After Begin, once the room is rendered and the already-running camera has a non-blank frame, `room_capture.js` clones the live room, swaps the camera video for its current frame, replaces the shared-screen preview with a neutral "Screen sharing active" label (screen pixels are never read or uploaded), and has the browser rasterise it through an SVG `foreignObject`. A real pixel-exact screenshot would need a second screen-sharing permission prompt, so it is deliberately not used. Consequences: fonts or effects the browser cannot rasterise may differ slightly from the live page; browsers that block canvas readback of the rasterised room fall back to a **camera-only still**, which the PDF labels as such and never presents as the room. One capture is attempted per interview (a few retries only for a blank camera frame); a failed capture never interrupts the voice interview and the PDF is still produced, stating that no image was saved.
+
+**Server rules.** Upload is accepted only from the authenticated candidate of that attempt, only while it is in progress and awaiting its single image; a second upload returns `already_saved` and never replaces the first; End or cancellation wins races (409). The server decodes and validates the JPEG (size, dimensions, pixel count per kind), strips metadata by re-encoding, and stores it privately; filenames, ids and kind claims from the browser are not trusted. The image is browser-submitted: it is not identity verification and not tamper-proof evidence.
+
+**Historical records.** Existing records, transcripts, camera-only stills and PDFs are untouched. A still from before this feature is labelled "camera snapshot from before interview-room images were introduced". Regeneration uses only stored evidence. Migration `0007` adds nullable `snapshot_kind`, `utterance_kind` and `question_number` columns (additive; no backfill).

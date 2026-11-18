@@ -4,7 +4,7 @@
 
 An administrator uses one **Schedule interview** form: candidate name and email, résumé (PDF/DOCX), job description (pasted or PDF/DOCX), optional private interviewer instructions, local date/time with timezone and target duration. The latest permitted start defaults to 30 minutes after the scheduled time and is adjustable under Advanced settings. Saving schedules the interview and queues both question preparation and invitation delivery; neither waits for the other and neither blocks the form. There is **no mandatory review or confirmation step**. Review and natural-language changes are optional afterwards. There is no manual question builder.
 
-The candidate joins with a private invitation without an account, confirms a self-reported full name, acknowledges the snapshot disclosure, checks devices and attends. The interviewer AI conducts a conversation without coaching, feedback, scores or hiring decisions. Administrators download a Conversation PDF with one acknowledged camera snapshot.
+The candidate joins with a private invitation without an account, confirms a self-reported full name, acknowledges the interview-room image disclosure, checks devices and attends. The interviewer AI conducts a conversation without coaching, feedback, scores or hiring decisions. Administrators download a Conversation PDF with one acknowledged camera snapshot.
 
 ## Statuses
 

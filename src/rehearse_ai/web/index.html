@@ -17,7 +17,7 @@
 
       <section id="setup-panel" class="card setup-panel" aria-labelledby="setup-heading">
         <div class="setup-heading"><div><span class="eyebrow">Before your interview</span><h1 id="setup-heading">Check your media</h1></div><a href="/candidate/welcome" id="cancel-setup" class="button secondary">Back to invitation</a></div>
-        <p class="setup-disclosure">One camera snapshot will be saved with your interview and included in the conversation PDF available to the administrator. Camera video and screen sharing are not recorded. Interview audio is processed by the voice services, and the conversation is saved.</p>
+        <p class="setup-disclosure">One image of the interview room, including your camera, will be saved with your interview for the Conversation PDF that only the administrator can open. It is taken once, shortly after the interview begins. There is no continuous recording and no further capture. Camera video is not recorded, and the contents of your shared screen are not saved. Interview audio is processed by the voice services, and the conversation is saved.</p>
         <div class="setup-previews">
           <div class="preview-panel"><span class="preview-label">Camera preview</span><video id="camera-preview" autoplay muted playsinline aria-label="Local camera preview"></video></div>
           <div class="preview-panel"><span class="preview-label">Screen preview</span><video id="screen-preview" autoplay muted playsinline aria-label="Local shared screen preview"></video></div>
@@ -26,7 +26,7 @@
           <div class="setup-tool"><button id="enable-devices" class="secondary" type="button">Enable camera and microphone</button><label for="mic-level">Microphone input level</label><meter id="mic-level" min="0" max="1" value="0">0</meter></div>
           <div class="setup-tool"><button id="share-screen" class="secondary" type="button">Share screen</button><button id="test-speaker" class="secondary" type="button">Test speaker</button><button id="confirm-speaker" class="secondary" type="button" disabled>I heard the tone</button></div>
         </div>
-        <div class="setup-bottom"><div><h2>Readiness</h2><ul class="readiness-list"><li id="check-microphone">Microphone <span>Needed</span></li><li id="check-camera">Camera preview <span>Needed</span></li><li id="check-screen">Screen preview <span>Needed</span></li><li id="check-speaker">Speaker test <span>Needed</span></li></ul><p id="setup-message" class="setup-message" role="status" aria-live="polite">Use the controls above to check your devices.</p><p id="prep-message" class="setup-message" role="status" aria-live="polite" hidden></p><label class="snapshot-consent"><input id="snapshot-consent" type="checkbox"> I understand that one camera snapshot will be saved and available to the administrator in the conversation PDF.</label></div><div class="setup-actions"><button id="begin-interview" class="primary" type="button" disabled>Begin interview</button></div></div>
+        <div class="setup-bottom"><div><h2>Readiness</h2><ul class="readiness-list"><li id="check-microphone">Microphone <span>Needed</span></li><li id="check-camera">Camera preview <span>Needed</span></li><li id="check-screen">Screen preview <span>Needed</span></li><li id="check-speaker">Speaker test <span>Needed</span></li></ul><p id="setup-message" class="setup-message" role="status" aria-live="polite">Use the controls above to check your devices.</p><p id="prep-message" class="setup-message" role="status" aria-live="polite" hidden></p><label class="snapshot-consent"><input id="snapshot-consent" type="checkbox"> I understand that one image of the interview room, including my camera, will be saved and available to the administrator in the Conversation PDF.</label></div><div class="setup-actions"><button id="begin-interview" class="primary" type="button" disabled>Begin interview</button></div></div>
       </section>
 
       <dialog id="interview-workspace" class="room-workspace" aria-labelledby="room-title" hidden>
@@ -43,12 +43,13 @@
           </section>
         </div>
         <p id="error" class="error" role="alert" hidden></p>
-        <div class="room-toolbar"><p class="disclosure">AI-generated voice · One camera still is saved for the admin PDF; screen sharing stays local. <span id="snapshot-status" role="status"></span></p><div class="controls"><button id="start" class="primary" type="button" hidden>Start again</button><button id="return-overview" class="secondary" type="button" hidden>Return to invitation</button><button id="end" class="danger" type="button" disabled>End interview</button></div></div>
+        <div class="room-toolbar"><p class="disclosure">AI-generated voice · One image of this room is saved for the admin PDF; shared-screen contents are not saved. <span id="snapshot-status" role="status"></span></p><div class="controls"><button id="start" class="primary" type="button" hidden>Start again</button><button id="return-overview" class="secondary" type="button" hidden>Return to invitation</button><button id="end" class="danger" type="button" disabled>End interview</button></div></div>
       </dialog>
       <p id="setup-error" class="error" role="alert" hidden></p>
       <audio id="remote-audio" autoplay></audio>
     </main>
     <script src="/assets/media_setup.js?v=__BUILD_ID__" defer></script>
+    <script src="/assets/room_capture.js?v=__BUILD_ID__" defer></script>
     <script src="/assets/app.js?v=__BUILD_ID__" defer></script>
   </body>
 </html>

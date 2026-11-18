@@ -70,7 +70,7 @@ from rehearse_ai.scheduling import (
     schedule_interview,
     send_invitation,
 )
-from rehearse_ai.snapshot import MAX_UPLOAD_BYTES, InvalidSnapshot, save_snapshot
+from rehearse_ai.snapshot import KINDS, LIMITS, InvalidSnapshot, save_snapshot
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 PACKAGE_DIR = WEB_DIR.parent
@@ -233,6 +233,7 @@ def create_app(settings: Settings) -> FastAPI:
             "assigned.js",
             "assignments.js",
             "schedule.js",
+            "room_capture.js",
         }:
             raise HTTPException(404)
         path = WEB_DIR / name
@@ -916,48 +917,63 @@ def create_app(settings: Settings) -> FastAPI:
         return await transcript_rows(db, record_id)
 
     @app.post("/api/interviews/{record_id}/snapshot", status_code=201)
-    async def candidate_snapshot(record_id: uuid.UUID, request: Request, db: Db) -> dict[str, str]:
+    async def candidate_snapshot(record_id: uuid.UUID, request: Request, db: Db) -> Response:
+        """Accept the one interview-room image for the authenticated, active attempt.
+
+        Nothing the browser says about itself is trusted: the attempt comes from the candidate
+        session cookie (never from the request), the file is decoded and re-encoded, and its
+        dimensions and size are checked against fixed limits. A second request is answered "already
+        saved" and never replaces the first, so a retry or a double send is harmless.
+        """
         assignment = await candidate_session(db, request)
         accounts.check_csrf(request)
+        kind = request.headers.get("x-capture-kind", "camera")  # older clients send no header
+        if kind not in KINDS:
+            raise HTTPException(400, "Unknown image kind")
         record = await db.get(InterviewRecord, record_id)
         if record is None or record.assignment_id != assignment.id:
             raise HTTPException(404, "Interview not found")
+        if record.snapshot_status == "available":
+            return JSONResponse({"status": "already_saved"}, status_code=200)
         if record.status != "in_progress" or record.snapshot_status != "pending":
-            raise HTTPException(409, "Camera snapshot is not accepted for this interview")
+            raise HTTPException(409, "An image is not accepted for this interview")
         if not any(
             live.log.session_id == str(record_id) and live.candidate_id == str(assignment.id)
             for live in sessions
         ):
             raise HTTPException(409, "Interview connection is no longer active")
         if request.headers.get("content-type", "").split(";", 1)[0] != "image/jpeg":
-            raise HTTPException(415, "Expected a JPEG camera image")
+            raise HTTPException(415, "Expected a JPEG image")
+        limit = LIMITS[kind].max_bytes
         size_header = request.headers.get("content-length", "0")
         if not size_header.isdecimal():
-            raise HTTPException(400, "Invalid camera image length")
-        if int(size_header) > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, "Camera image is too large")
+            raise HTTPException(400, "Invalid image length")
+        if int(size_header) > limit:
+            raise HTTPException(413, "Image is too large")
         raw = bytearray()
         async for chunk in request.stream():
             raw.extend(chunk)
-            if len(raw) > MAX_UPLOAD_BYTES:
-                raise HTTPException(413, "Camera image is too large")
+            if len(raw) > limit:
+                raise HTTPException(413, "Image is too large")
         async with db_sessions.begin() as transaction:
             current = await transaction.get(InterviewRecord, record_id, with_for_update=True)
-            if (
-                current is None
-                or current.assignment_id != assignment.id
-                or current.status != "in_progress"
-                or current.snapshot_status != "pending"
-            ):
-                raise HTTPException(409, "Camera snapshot is no longer accepted")
+            if current is None or current.assignment_id != assignment.id:
+                raise HTTPException(404, "Interview not found")
+            if current.snapshot_status == "available":
+                return JSONResponse({"status": "already_saved"}, status_code=200)
+            if current.status != "in_progress" or current.snapshot_status != "pending":
+                raise HTTPException(409, "An image is no longer accepted")
             try:
-                await asyncio.to_thread(save_snapshot, bytes(raw), store.snapshot_path(record_id))
+                await asyncio.to_thread(
+                    save_snapshot, bytes(raw), store.snapshot_path(record_id), kind
+                )
             except InvalidSnapshot as exc:
                 raise HTTPException(422, str(exc)) from exc
             current.snapshot_status = "available"
+            current.snapshot_kind = kind
             current.snapshot_captured_at = datetime.now(UTC)
         store.snapshot_ready(record_id)
-        return {"status": "saved"}
+        return JSONResponse({"status": "saved", "kind": kind}, status_code=201)
 
     async def pdf_response(record: InterviewRecord) -> Response:
         if record.status not in TERMINAL:

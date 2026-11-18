@@ -33,6 +33,14 @@ class AttemptStart(NamedTuple):
     plan: dict[str, Any]
 
 
+def _short(value: Any, limit: int) -> str | None:
+    return value[:limit] if isinstance(value, str) and value else None
+
+
+def _question_number(value: Any) -> int | None:
+    return value if type(value) is int and 0 < value < 1000 else None
+
+
 def event_time(event: dict[str, Any]) -> datetime:
     return datetime.fromisoformat(event["timestamp_utc"])
 
@@ -290,6 +298,8 @@ class InterviewStore:
                             timestamp_utc=timestamp,
                             status="prepared",
                             interrupted=False,
+                            utterance_kind=_short(event.get("utterance_kind"), 24),
+                            question_number=_question_number(event.get("question_number")),
                         )
                     )
             elif (
@@ -460,14 +470,30 @@ class InterviewStore:
         try:
             async with self.db_sessions() as db:
                 record = await db.get(InterviewRecord, record_id)
+                timezone_name = None
+                title = None
+                topics: list[str] | None = None
                 if record.assignment_id:
                     assignment = await db.get(InterviewAssignment, record.assignment_id)
                     candidate_email = assignment.candidate_email
-                    candidate_name = assignment.self_reported_name
+                    candidate_name = assignment.self_reported_name or assignment.candidate_name
+                    timezone_name = assignment.timezone
                 else:
                     candidate = await db.get(Candidate, record.candidate_id)
                     candidate_email = candidate.email
                     candidate_name = None
+                if record.blueprint_version_id:
+                    version = await db.get(BlueprintVersion, record.blueprint_version_id)
+                    content = (
+                        version.content if version and isinstance(version.content, dict) else {}
+                    )
+                    title = content.get("title") if isinstance(content.get("title"), str) else None
+                    questions = content.get("questions")
+                    if isinstance(questions, list):
+                        topics = [
+                            str(item.get("topic", "")) if isinstance(item, dict) else ""
+                            for item in questions
+                        ]
                 entries = (
                     await db.scalars(
                         select(TranscriptEntry)
@@ -485,7 +511,14 @@ class InterviewStore:
                     "candidate_id": str(record.candidate_id) if record.candidate_id else None,
                     "candidate_email": candidate_email,
                     "candidate_name": candidate_name,
+                    "timezone": timezone_name,
+                    "interview_title": title,
+                    "question_topics": topics,
+                    "coverage": record.coverage_summary,
+                    "build_id": record.build_id,
+                    "prompt_version": record.prompt_version,
                     "snapshot_captured_at": record.snapshot_captured_at,
+                    "snapshot_kind": record.snapshot_kind,
                 }
                 snapshot_path = self.snapshot_path(record_id)
                 data["snapshot_path"] = (
@@ -500,6 +533,8 @@ class InterviewStore:
                         "timestamp_utc": entry.timestamp_utc,
                         "status": entry.status,
                         "interrupted": entry.interrupted,
+                        "utterance_kind": entry.utterance_kind,
+                        "question_number": entry.question_number,
                     }
                     for entry in entries
                 ]

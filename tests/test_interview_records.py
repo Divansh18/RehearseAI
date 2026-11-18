@@ -110,7 +110,7 @@ async def test_order_corrections_terminal_states_and_stale_events(tmp_path):
         assert "I used web books" in text
         assert "webhooks" not in text
         assert "partial interview conversation" in text
-        assert "Camera snapshot unavailable" in text
+        assert "No interview image was saved for this interview" in text
     finally:
         await engine.dispose()
 
@@ -428,14 +428,16 @@ def test_pdf_metadata_and_conversation_labels(tmp_path, status, expected_partial
     text = "\n".join(page.extract_text() for page in PdfReader(path).pages)
     assert "Conversation PDF" in text
     assert "candidate@example.com" in text
-    assert "Candidate name (self-reported)" in text and "Zoë García" in text
+    assert "Candidate (self-reported)" in text and "Zoë García" in text
     assert "UTC" in text and "4m 12s" in text
-    assert status.replace("_", " ").title() in text
+    assert {"completed": "Completed", "ended_early": "Ended early", "interrupted": "Interrupted"}[
+        status
+    ] in text
     assert ("partial interview conversation" in text) is expected_partial
     assert text.index("Tell me about your project") < text.index("I built a webhook service")
     assert "RehearseAI" in text and "Candidate" in text
-    assert "Machine transcription" in text
-    assert "exact words heard unknown" in text
+    assert "machine transcription" in " ".join(text.split()).lower()
+    assert "only part of it may have been heard" in " ".join(text.split())
     assert "Page 1" in text
 
 

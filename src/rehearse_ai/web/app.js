@@ -190,34 +190,78 @@ function openRoom() {
   roomTitle.focus();
 }
 
+// One image of the interview room is saved for the admin-only Conversation PDF. It is taken once,
+// after Begin, when the room is on screen and the camera has a valid frame: shortly after the first
+// question is shown, or after a fallback delay if the opening runs long. A failure here never
+// touches the interview; it only changes the status line.
+const ROOM_CAPTURE_SETTLE_MS = 500;
+const ROOM_CAPTURE_FALLBACK_MS = 20000;
+const ROOM_CAPTURE_PAUSED_RETRY_MS = 3000;
+const ROOM_CAPTURE_RENDER_TRIES = 3;
+const ROOM_CAPTURE_RETRY_MS = 800;
+const ROOM_IMAGE_UNAVAILABLE = 'Room image unavailable; interview continues.';
+let captureTimer = null;
+let activeSessionId = null;
+
+function clearCaptureTimer() {
+  if (captureTimer !== null) clearTimeout(captureTimer);
+  captureTimer = null;
+}
+
+function scheduleRoomCapture(sessionId, delay) {
+  clearCaptureTimer();
+  const scheduledAttempt = attempt;
+  captureTimer = setTimeout(() => {
+    captureTimer = null;
+    captureSnapshot(sessionId, scheduledAttempt).catch(() => {
+      if (!sessionClosed) snapshotStatus.textContent = ROOM_IMAGE_UNAVAILABLE;
+    });
+  }, delay);
+}
+
 async function captureSnapshot(sessionId, currentAttempt) {
-  if (snapshotAttempted || !beginSent || !snapshotConsent.checked || sessionClosed || mediaPaused) return;
+  if (snapshotAttempted || !beginSent || !snapshotConsent.checked || sessionClosed) return;
+  if (currentAttempt !== attempt) return;
+  if (mediaPaused) { scheduleRoomCapture(sessionId, ROOM_CAPTURE_PAUSED_RETRY_MS); return; }
   snapshotAttempted = true;
+  const stale = () => currentAttempt !== attempt || sessionClosed || mediaPaused;
   const video = document.querySelector('#room-camera-preview');
-  if (!mediaSetup?.live(mediaSetup.camera, 'video') || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
-    snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
-    return;
+  const capture = window.RehearseRoomCapture;
+  let result = { error: 'capture_unavailable' };
+  if (capture && mediaSetup?.live(mediaSetup.camera, 'video')) {
+    for (let tries = 0; tries < ROOM_CAPTURE_RENDER_TRIES; tries += 1) {
+      result = await capture.captureRoom({
+        dialog: workspace, cameraVideo: video,
+        screenActive: Boolean(mediaSetup.live(mediaSetup.screen, 'video')),
+      });
+      if (!result.error || stale()) break;
+      // A blank camera frame or an unrendered room may just be early; anything else will not improve.
+      if (!['camera_frame_unavailable', 'room_not_rendered'].includes(result.error)) break;
+      await new Promise((resolve) => setTimeout(resolve, ROOM_CAPTURE_RETRY_MS));
+      if (stale()) return;
+    }
+    // The room could not be rendered here: save the camera-only fallback, labelled as such.
+    if (result.error && !stale()) result = await capture.captureCameraOnly({ cameraVideo: video });
   }
-  const scale = Math.min(1, 640 / video.videoWidth, 360 / video.videoHeight);
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.78));
-  if (!blob || blob.type !== 'image/jpeg' || blob.size > 1000000 || currentAttempt !== attempt || sessionClosed || mediaPaused) {
-    snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
+  if (stale()) return;
+  if (result.error || !result.blob || result.blob.type !== 'image/jpeg' || result.blob.size > 1500000) {
+    snapshotStatus.textContent = ROOM_IMAGE_UNAVAILABLE;
     return;
   }
   snapshotAbort = new AbortController();
   for (let tries = 0; tries < 3; tries += 1) {
-    if (currentAttempt !== attempt || sessionClosed || mediaPaused) return;
+    if (stale()) return;
     try {
       const response = await fetch(`/api/interviews/${sessionId}/snapshot`, {
         method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'image/jpeg', 'X-CSRF-Token': csrfToken },
-        body: blob, signal: snapshotAbort.signal,
+        headers: { 'Content-Type': 'image/jpeg', 'X-Capture-Kind': result.kind, 'X-CSRF-Token': csrfToken },
+        body: result.blob, signal: snapshotAbort.signal,
       });
-      if (response.ok) { snapshotStatus.textContent = 'Camera snapshot saved.'; return; }
+      if (response.ok) {
+        snapshotStatus.textContent = result.kind === 'room'
+          ? 'Room image saved.' : 'Camera image saved (room image unavailable).';
+        return;
+      }
       if (response.status !== 409 || tries === 2) break;
       await new Promise((resolve) => setTimeout(resolve, 200));
     } catch (error) {
@@ -225,7 +269,7 @@ async function captureSnapshot(sessionId, currentAttempt) {
       break;
     }
   }
-  if (currentAttempt === attempt && !sessionClosed) snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
+  if (currentAttempt === attempt && !sessionClosed) snapshotStatus.textContent = ROOM_IMAGE_UNAVAILABLE;
 }
 
 function handleEvent(message) {
@@ -252,9 +296,8 @@ function handleEvent(message) {
   if (entry.event === 'session_started') {
     document.querySelector('#session-id').textContent = `Session ${entry.session_id}`;
     startTimer();
-    captureSnapshot(entry.session_id, attempt).catch(() => {
-      if (!sessionClosed) snapshotStatus.textContent = 'Camera snapshot unavailable; interview continues.';
-    });
+    activeSessionId = entry.session_id;
+    scheduleRoomCapture(entry.session_id, ROOM_CAPTURE_FALLBACK_MS);
   } else if (entry.event === 'candidate_started') {
     if (errorLabel.hidden) setStatus('Listening');
   } else if (entry.event === 'candidate_turn_completed') {
@@ -272,6 +315,8 @@ function handleEvent(message) {
       questionCount.textContent = `${String(pending.question_number).padStart(2, '0')} / ${String(questionTotal).padStart(2, '0')}`;
       questionCount.hidden = false;
       setProgress(pending.question_number);
+      // The room now shows a real question: take the image once it has painted.
+      if (activeSessionId && !snapshotAttempted) scheduleRoomCapture(activeSessionId, ROOM_CAPTURE_SETTLE_MS);
     }
     setStatus('Speaking');
   } else if (entry.event === 'agent_interrupted') {
@@ -284,11 +329,13 @@ function handleEvent(message) {
     guidance.textContent = 'Take your time; keep going when you’re ready.';
     if (errorLabel.hidden) setStatus('Listening');
   } else if (entry.event === 'interview_complete') {
+    clearCaptureTimer();
     setInterviewPhase('Interview complete', 'That wraps up your interview.', 'Finishing the closing audio.');
     questionCount.hidden = true;
     setProgress(questionTotal, true);
     scheduleAutomaticEnd();
   } else if (entry.event === 'interview_ended_early') {
+    clearCaptureTimer();
     setInterviewPhase('Ended early', 'Interview ended early.', 'Finishing the closing audio.');
     questionCount.hidden = true;
     scheduleAutomaticEnd();
@@ -335,6 +382,8 @@ function finishSession({ manual = false } = {}) {
   cleanupTimeout = null;
   stopTimer();
   offerAbort?.abort();
+  clearCaptureTimer();
+  activeSessionId = null;
   snapshotAbort?.abort();
   snapshotAbort = null;
   offerAbort = null;
@@ -480,6 +529,8 @@ async function startSession() {
   delete errorLabel.dataset.kind;
   snapshotStatus.textContent = '';
   snapshotAttempted = false;
+  clearCaptureTimer();
+  activeSessionId = null;
   prepared.clear();
   startedUtterances.clear();
   document.querySelector('#session-id').textContent = 'Connecting to a session';

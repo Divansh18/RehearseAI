@@ -170,37 +170,140 @@ test('room is modal, locks background scrolling, and Escape cannot dismiss it', 
   assert.equal(nodes['begin-interview'].focused, true);
 });
 
-test('one acknowledged started interview captures camera only and never captures setup or screen', async () => {
+function roomCaptureFixture({ capture, fetchResponse } = {}) {
   const uploads = [];
-  const draws = [];
-  const { nodes, context, send } = fixture({ fetchResponse: async (url, options) => {
+  const calls = [];
+  const interview = fixture({ fetchResponse: async (url, options) => {
     uploads.push({ url, options });
-    return { ok: true, status: 201 };
+    return fetchResponse ? fetchResponse(url, options) : { ok: true, status: 201 };
   } });
-  const camera = { getVideoTracks: () => [fakeTrack('video')] };
-  const screen = { getVideoTracks: () => [fakeTrack('video')] };
-  context.syntheticSetup = { camera, screen, live: () => true };
-  vm.runInContext('mediaSetup = syntheticSetup; csrfToken = "synthetic";', context);
-  nodes['snapshot-consent'].checked = true;
-  const video = nodes['room-camera-preview'];
-  video.readyState = 2;
-  video.videoWidth = 1280;
-  video.videoHeight = 720;
-  context.document.createElement = (tag) => tag === 'canvas' ? {
-    getContext: () => ({ drawImage(source) { draws.push(source); } }),
-    toBlob(callback) { callback(new Blob(['synthetic jpeg'], { type: 'image/jpeg' })); },
-  } : new Element(tag);
+  const jpeg = () => new Blob(['synthetic jpeg'], { type: 'image/jpeg' });
+  interview.context.window.RehearseRoomCapture = capture || {
+    captureRoom: async (options) => { calls.push({ kind: 'room', options }); return { blob: jpeg(), kind: 'room' }; },
+    captureCameraOnly: async () => { calls.push({ kind: 'camera' }); return { blob: jpeg(), kind: 'camera' }; },
+  };
+  const camera = { getVideoTracks: () => [{ readyState: 'live' }] };
+  interview.context.syntheticSetup = { camera, screen: camera, live: () => true, ready: () => true, cleanup() {}, showRoomPreviews() {}, update() {} };
+  vm.runInContext('mediaSetup = syntheticSetup; csrfToken = "synthetic";', interview.context);
+  interview.nodes['snapshot-consent'].checked = true;
+  return { ...interview, uploads, calls };
+}
+
+const settleUploads = async () => { for (let i = 0; i < 5; i += 1) await new Promise(setImmediate); };
+
+test('one acknowledged interview saves one room image after the first question, never at setup', async () => {
+  const { nodes, context, send, uploads, calls, flushTimeouts, timeouts } = roomCaptureFixture();
   send({ event: 'session_started', session_id: 'synthetic-session' });
-  await new Promise(setImmediate);
-  assert.equal(uploads.length, 0);
+  flushTimeouts();
+  await settleUploads();
+  assert.equal(uploads.length, 0); // Begin was not sent, so nothing is captured at setup
   vm.runInContext('beginSent = true;', context);
   send({ event: 'session_started', session_id: 'synthetic-session' });
-  send({ event: 'session_started', session_id: 'synthetic-session' });
-  await new Promise(setImmediate);
-  assert.deepEqual(draws, [video]);
+  // The first question is shown: a short settle delay, then one capture.
+  send({ event: 'agent_prepared', utterance_id: 1, utterance_kind: 'question', question_number: 1, text: 'Question one.' });
+  send({ event: 'agent_output_started', utterance_id: 1 });
+  send({ event: 'agent_output_started', utterance_id: 1 });
+  assert.equal(timeouts.size >= 1, true);
+  flushTimeouts();
+  await settleUploads();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].kind, 'room');
+  assert.equal(calls[0].options.dialog, context.document.querySelector('#interview-workspace'));
   assert.equal(uploads.length, 1);
   assert.match(uploads[0].url, /synthetic-session\/snapshot$/);
-  assert.equal(nodes['snapshot-status'].textContent, 'Camera snapshot saved.');
+  assert.equal(uploads[0].options.headers['X-Capture-Kind'], 'room');
+  assert.equal(uploads[0].options.headers['Content-Type'], 'image/jpeg');
+  assert.equal(nodes['snapshot-status'].textContent, 'Room image saved.');
+  // More triggers later do not capture again.
+  send({ event: 'agent_prepared', utterance_id: 2, utterance_kind: 'question', question_number: 2, text: 'Two.' });
+  send({ event: 'agent_output_started', utterance_id: 2 });
+  flushTimeouts();
+  await settleUploads();
+  assert.equal(uploads.length, 1);
+});
+
+test('a long opening still gets one image after the fallback delay', async () => {
+  const { context, send, uploads, flushTimeouts } = roomCaptureFixture();
+  vm.runInContext('beginSent = true;', context);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  flushTimeouts(); // the fallback timer, as no question has started
+  await settleUploads();
+  assert.equal(uploads.length, 1);
+});
+
+test('if the room cannot be rendered a labelled camera-only fallback is saved instead', async () => {
+  const calls = [];
+  const jpeg = () => new Blob(['synthetic jpeg'], { type: 'image/jpeg' });
+  const { nodes, context, send, uploads, flushTimeouts } = roomCaptureFixture({ capture: {
+    captureRoom: async () => { calls.push('room'); return { error: 'raster_blocked' }; },
+    captureCameraOnly: async () => { calls.push('camera'); return { blob: jpeg(), kind: 'camera' }; },
+  } });
+  vm.runInContext('beginSent = true;', context);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  flushTimeouts();
+  await settleUploads();
+  assert.deepEqual(calls, ['room', 'camera']);
+  assert.equal(uploads[0].options.headers['X-Capture-Kind'], 'camera');
+  assert.match(nodes['snapshot-status'].textContent, /room image unavailable/i);
+});
+
+test('a failed capture never disturbs the interview', async () => {
+  const { nodes, context, send, uploads, flushTimeouts } = roomCaptureFixture({ capture: {
+    captureRoom: async () => ({ error: 'raster_failed' }),
+    captureCameraOnly: async () => ({ error: 'camera_frame_unavailable' }),
+  } });
+  vm.runInContext('beginSent = true;', context);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  flushTimeouts();
+  await settleUploads();
+  assert.equal(uploads.length, 0);
+  assert.match(nodes['snapshot-status'].textContent, /interview continues/);
+  assert.equal(nodes.error.hidden, true);
+  assert.notEqual(nodes.connection.textContent, 'Error');
+});
+
+test('a blank camera frame is retried, then the camera-only fallback is tried', async () => {
+  let rooms = 0;
+  const { context, send, uploads, flushTimeouts, timeouts } = roomCaptureFixture({ capture: {
+    captureRoom: async () => { rooms += 1; return { error: 'camera_frame_unavailable' }; },
+    captureCameraOnly: async () => ({ error: 'camera_frame_unavailable' }),
+  } });
+  vm.runInContext('beginSent = true;', context);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  flushTimeouts();
+  for (let i = 0; i < 4; i += 1) { await settleUploads(); flushTimeouts(); }
+  await settleUploads();
+  assert.equal(rooms, 3);
+  assert.equal(uploads.length, 0);
+  assert.equal(timeouts.size, 0);
+});
+
+test('ending the interview before the capture fires uploads nothing', async () => {
+  const { context, send, uploads, calls, flushTimeouts, timeouts } = roomCaptureFixture();
+  vm.runInContext('beginSent = true;', context);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  assert.equal(timeouts.size >= 1, true);
+  context.endSession();
+  assert.equal(timeouts.size, 0); // the pending capture was cancelled
+  flushTimeouts();
+  await settleUploads();
+  assert.equal(calls.length, 0);
+  assert.equal(uploads.length, 0);
+});
+
+test('a media-loss pause defers the capture instead of taking a degraded image', async () => {
+  const { context, send, uploads, calls, flushTimeouts } = roomCaptureFixture();
+  vm.runInContext('beginSent = true;', context);
+  send({ event: 'session_started', session_id: 'synthetic-session' });
+  send({ event: 'media_paused', reason: 'camera_lost' });
+  flushTimeouts();
+  await settleUploads();
+  assert.equal(calls.length, 0);
+  assert.equal(uploads.length, 0);
+  send({ event: 'media_resumed' });
+  flushTimeouts();
+  await settleUploads();
+  assert.equal(uploads.length, 1);
 });
 
 test('no-audio warning stays visible during preparation and clears when server output starts', () => {

@@ -159,6 +159,9 @@ class InterviewRecord(Base):
     pdf_error: Mapped[str | None] = mapped_column(String(120))
     snapshot_status: Mapped[str] = mapped_column(String(16), nullable=False, default="not_started")
     snapshot_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # "room" (browser-rendered interview-room image) or "camera" (camera-only still). NULL on
+    # records made before room images existed: those are camera-only stills.
+    snapshot_kind: Mapped[str | None] = mapped_column(String(12))
     # The plan version this attempt ran, frozen atomically when the attempt starts.
     blueprint_version_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT")
@@ -189,6 +192,9 @@ class TranscriptEntry(Base):
     interrupted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     output_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     output_ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Recorded for interviewer utterances only; NULL where it was not recorded.
+    utterance_kind: Mapped[str | None] = mapped_column(String(24))
+    question_number: Mapped[int | None] = mapped_column(Integer)
 
 
 class InterviewPreparation(Base):

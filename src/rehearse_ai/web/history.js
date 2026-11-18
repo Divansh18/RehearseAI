@@ -150,11 +150,11 @@ async function loadDetail() {
     state.textContent = 'Generation failed. The saved conversation remains available for regeneration.';
     regenerate.hidden = false;
     regenerate.addEventListener('click', async () => {
-      try { await securePost(`${base}/pdf/regenerate`); state.textContent = 'PDF regeneration queued. Refresh shortly.'; regenerate.hidden = true; }
+      try { await securePost(`${base}/pdf/regenerate`); state.textContent = 'Conversation PDF regeneration queued. Refresh shortly.'; regenerate.hidden = true; }
       catch (error) { show(error.message); }
     });
   } else {
-    state.textContent = 'Preparing conversation PDF. Refresh shortly.';
+    state.textContent = 'Preparing the Conversation PDF. Refresh shortly.';
   }
 }
 

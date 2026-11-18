@@ -31,3 +31,14 @@ After the run, analyse the newest file: `uv run python evaluation/session_timing
 **Also check, every run:** no transcript fragment appears in the *wrong* turn (compare `turn_correlation`; there should be no long waits for `pre_start_segment`); the PDF shows the conversation in order; the admin coverage summary reports `opening_seconds`.
 
 **Report back:** per-stage times from `response_latency` for a few responses (STT after speech end, wait to turn complete, model, TTS, output start), any misrecognitions with their `stt_confidence`, and anything that felt like a wrong interruption.
+
+## Real-device acceptance: Conversation PDF and room image
+
+Use a real laptop/phone with a real camera and screen share. Do not rely on synthetic-camera runs.
+1. Open the invitation; confirm the setup text says one interview-room image, including your camera, is saved for the admin-only Conversation PDF, and Begin stays disabled until acknowledged.
+2. Share a screen showing something recognisable (e.g. a coloured window). Begin; answer one question, then End.
+3. As admin, click **Download Conversation PDF**. Confirm the room image shows your camera, the RehearseAI panel, current question/status and controls, and the shared screen appears only as "Screen sharing active" (none of its pixels).
+4. Confirm the caption says browser-rendered, not a screenshot; name, email, date/timezone, duration and status are correct; the conversation is in order with relative times; no scores or recommendations.
+5. End immediately after Begin (before the first question) and check the PDF still builds, stating no image was saved if none was captured.
+6. In Safari and a phone browser, check the image or the labelled camera-only fallback; the interview must never stall.
+7. Signed in as the candidate, confirm there is no way to download the PDF or image.
