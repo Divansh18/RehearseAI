@@ -1,5 +1,6 @@
 """Pipecat assembly; interview policy remains in the domain controller."""
 
+import asyncio
 import json
 import uuid
 from collections.abc import Callable, Mapping
@@ -143,19 +144,72 @@ ASSIGNED_DECISION_SCHEMA = {
 }
 
 
+# How long an empty turn boundary waits for the transcript that caused it. Pipecat only ends a
+# turn once a transcript exists, but the boundary is a system frame and can overtake that
+# transcript (a data frame) by a few milliseconds. Measured gaps were under 10 ms.
+LATE_TRANSCRIPT_GRACE_SECS = 0.35
+
+
+def stt_details(frame: Any) -> dict[str, Any]:
+    """Provider-reported confidence and audio position of a transcript, when available.
+
+    These explain whether a mistake was *heard* wrongly (low confidence) or only *delivered*
+    late (audio position far behind arrival). Missing values are simply omitted.
+    """
+    details: dict[str, Any] = {}
+    result = getattr(frame, "result", None)
+    try:
+        alternative = result.channel.alternatives[0]
+        if isinstance(alternative.confidence, (int, float)):
+            details["stt_confidence"] = round(float(alternative.confidence), 3)
+        start, duration = getattr(result, "start", None), getattr(result, "duration", None)
+        if isinstance(start, (int, float)) and isinstance(duration, (int, float)):
+            details["stt_audio_start_s"] = round(float(start), 2)
+            details["stt_audio_end_s"] = round(float(start) + float(duration), 2)
+    except (AttributeError, IndexError, TypeError):
+        pass
+    return details
+
+
 class InterviewInput(FrameProcessor):
     """Collect final STT segments within Pipecat's single user-turn boundary."""
 
-    def __init__(self) -> None:
+    def __init__(self, late_grace_secs: float = LATE_TRANSCRIPT_GRACE_SECS) -> None:
         super().__init__()
         self.session: InterviewSession | None = None
         self._segments: list[str] = []
         self._turn_open = False
+        self._late_grace_secs = late_grace_secs
+        self._last_boundary_id = 0
+        self._deferred_boundary: int | None = None
+        self._deferred_task: asyncio.Task[None] | None = None
         self._media_paused = False
         self._discard_until_boundary = False
         self._resume_requested = False
 
+    def _cancel_deferred(self) -> None:
+        self._deferred_boundary = None
+        if self._deferred_task and not self._deferred_task.done():
+            self._deferred_task.cancel()
+        self._deferred_task = None
+
+    async def cleanup(self) -> None:
+        self._cancel_deferred()
+        await super().cleanup()
+
+    async def _expire_deferred(self, boundary_id: int) -> None:
+        """No transcript came for an empty boundary: report it as the empty turn it is."""
+        try:
+            await asyncio.sleep(self._late_grace_secs)
+        except asyncio.CancelledError:
+            return
+        if self._deferred_boundary == boundary_id and self.session is not None:
+            self._deferred_boundary = None
+            self._deferred_task = None
+            await self.session.user_stopped("", segment_count=0, boundary_frame_id=boundary_id)
+
     def set_media_paused(self, paused: bool) -> None:
+        self._cancel_deferred()
         if paused:
             self._discard_until_boundary = self._turn_open or bool(self._segments)
             self._resume_requested = False
@@ -181,6 +235,49 @@ class InterviewInput(FrameProcessor):
     async def cancel_audio(self) -> None:
         await self.broadcast_interruption()
 
+    async def _handle_transcript(self, frame: TranscriptionFrame) -> None:
+        """Place a final transcript by when it was *created*, not when it arrived.
+
+        A transcript created before a turn boundary but delivered after it belongs to that
+        turn. Treating it as the start of the next turn (as arrival order suggests) held it
+        unprocessed until some later boundary and merged it into unrelated speech.
+        """
+        session = self.session
+        assert session is not None  # noqa: S101 - guarded by the caller
+        text = frame.text.strip()
+        details = stt_details(frame)
+        common = {
+            "frame_timestamp": frame.timestamp,
+            "finalized": frame.finalized,
+            "frame_id": frame.id,
+            **details,
+        }
+        deferred = self._deferred_boundary
+        if deferred is not None and frame.id < deferred and not self._turn_open:
+            self._cancel_deferred()
+            session.transcript_segment(
+                text, correlation="late_for_boundary", boundary_frame_id=deferred, **common
+            )
+            await session.user_stopped(text, segment_count=1, boundary_frame_id=deferred)
+            return
+        if not self._turn_open and frame.id < self._last_boundary_id:
+            session.transcript_segment(
+                text,
+                correlation="late_after_boundary",
+                boundary_frame_id=self._last_boundary_id,
+                **common,
+            )
+            await session.late_transcript(text, boundary_frame_id=self._last_boundary_id)
+            return
+        self._segments.append(text)
+        session.transcript_segment(
+            text,
+            correlation="active_turn" if self._turn_open else "pre_start_segment",
+            **common,
+        )
+        if self._turn_open:
+            await session.detect_stop_from_segments(" ".join(self._segments))
+
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if (
@@ -205,6 +302,9 @@ class InterviewInput(FrameProcessor):
             return
         if direction is FrameDirection.DOWNSTREAM and self.session is not None:
             if isinstance(frame, UserStartedSpeakingFrame):
+                # New speech supersedes an empty boundary still waiting for its transcript; that
+                # transcript, if it arrives, is handled as a late continuation.
+                self._cancel_deferred()
                 if not self._turn_open:
                     self._turn_open = True
                     await self.session.user_started()
@@ -221,25 +321,23 @@ class InterviewInput(FrameProcessor):
                 )
             elif isinstance(frame, TranscriptionFrame):
                 if frame.text.strip():
-                    self._segments.append(frame.text.strip())
-                    self.session.transcript_segment(
-                        frame.text.strip(),
-                        frame_timestamp=frame.timestamp,
-                        finalized=frame.finalized,
-                        frame_id=frame.id,
-                        pre_start=not self._turn_open,
-                    )
-                    if self._turn_open:
-                        await self.session.detect_stop_from_segments(" ".join(self._segments))
+                    await self._handle_transcript(frame)
             elif isinstance(frame, UserStoppedSpeakingFrame):
                 if self._turn_open or self._segments:
-                    await self.session.user_stopped(
-                        " ".join(self._segments),
-                        segment_count=len(self._segments),
-                        boundary_frame_id=frame.id,
-                    )
+                    boundary = frame.id
+                    self._last_boundary_id = boundary
                     self._turn_open = False
-                    self._segments.clear()
+                    if self._segments:
+                        text, count = " ".join(self._segments), len(self._segments)
+                        self._segments.clear()
+                        await self.session.user_stopped(
+                            text, segment_count=count, boundary_frame_id=boundary
+                        )
+                    else:
+                        # Pipecat ends a turn only once it holds a transcript, so one is in
+                        # flight behind this boundary. Wait briefly for it.
+                        self._deferred_boundary = boundary
+                        self._deferred_task = asyncio.create_task(self._expire_deferred(boundary))
         await self.push_frame(frame, direction)
 
 
