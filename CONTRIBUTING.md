@@ -86,6 +86,15 @@ the Python name and keep the stored name explicit, as `database/models.py` does 
   never write a destructive one. Then update `database/models.py` to match: `backend/tests/test_schema_drift.py` fails
   if the models and migrations disagree (see [MODELS_AND_MIGRATIONS.md](docs/architecture/MODELS_AND_MIGRATIONS.md)).
 
+## Logging
+
+Log through `rehearse_ai.operational_log.event(LOGGER, "category.what_happened", ...)`, with stable
+ids, counts, durations and fixed codes only: never a name, email, token, document or anything said
+or generated. Pass `exc_info=True` for failures (the exception class and location are logged, not
+its message). Do not add `print`, a second handler or another logging library. Operational logs,
+the protected `sessions/` files and the audit table are different records; see
+[LOGGING.md](docs/architecture/LOGGING.md) before adding to any of them.
+
 ## Where documents go
 
 `README.md` and this file are the entry points. Everything longer lives in `docs/`: `architecture/`

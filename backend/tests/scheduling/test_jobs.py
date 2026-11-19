@@ -608,3 +608,38 @@ def test_retry_preparation_and_resend_recover_failed_work_over_http(tmp_path, ad
         assert detail["preparation_status"] == "ready" and len(detail["plan_versions"]) == 1
         resent = admin.post(f"/api/admin/assignments/{assignment_id}/resend", headers=headers)
         assert resent.status_code == 200 and len(app.state.sent_mail) == 2
+
+
+@pytest.mark.asyncio
+async def test_job_attempts_are_logged_with_ids_codes_and_no_private_text(env, tmp_path):
+    """Operational log for failing then exhausted preparation: correlated, content-free."""
+    import json
+
+    from rehearse_ai.config import LogSettings
+    from rehearse_ai.operational_log import configure_logging
+
+    handle = configure_logging(
+        LogSettings(directory=tmp_path / "oplogs", console=False), build_id="test"
+    )
+    try:
+        env.app.state.plan_generator = FakeGenerator(PlanProviderError("APIConnectionError"))
+        assignment_id = await env.schedule(candidate_email="nyla.private@example.com")
+        for _ in range(3):
+            await env.runner.drain()
+            env.advance(minutes=10)
+    finally:
+        handle.shutdown()
+    written = (tmp_path / "oplogs" / "application.jsonl").read_text()
+    assert "PRIVATE" not in written and "nyla.private" not in written
+    assert RESUME_TEXT[:40] not in written
+    rows = [json.loads(line) for line in written.splitlines()]
+    prepare = [r for r in rows if r.get("job_kind") == "prepare"]
+    assert {r["event"] for r in prepare} >= {
+        "job.started",
+        "job.attempt_failed",
+        "job.retry_scheduled",
+        "job.failed",
+    }
+    assert {r["assignment_id"] for r in prepare} == {str(assignment_id)}
+    assert all(r["job_id"] for r in prepare)
+    assert next(r for r in prepare if r["event"] == "job.failed")["error_code"] == "model_error"

@@ -42,6 +42,26 @@ print("SEED" + json.dumps({"email": email, "password": PASSWORD, "token": token}
 """
 
 
+def check_operational_log(directory: Path, data: dict) -> list[str]:
+    """The server's own log of this run: valid JSON, lifecycle present, no private values."""
+    path = directory / "application.jsonl"
+    if not path.exists():
+        return [f"no operational log at {path}"]
+    text = path.read_text(encoding="utf-8")
+    found: list[str] = []
+    try:
+        events = {json.loads(line)["event"] for line in text.splitlines()}
+    except (ValueError, KeyError):
+        return ["operational log is not valid JSON lines"]
+    for expected in ("log.configured", "app.started", "app.stopped"):
+        if expected not in events:
+            found.append(f"operational log lacks {expected}")
+    for secret in (data["token"], data["email"], data["password"], "Nyla Example"):
+        if secret in text:
+            found.append("operational log contains a private value")
+    return found
+
+
 def main() -> int:
     seeded = subprocess.run(
         [str(PYTHON), "-c", SEED],
@@ -69,6 +89,8 @@ def main() -> int:
         "REHEARSE_PDF_DIR": f"{work}/pdfs",
         "REHEARSE_SNAPSHOT_DIR": f"{work}/snapshots",
         "REHEARSE_DOCUMENT_DIR": f"{work}/documents",
+        "REHEARSE_LOG_DIR": f"{work}/logs",
+        "REHEARSE_LOG_CONSOLE": "off",
     }
     server = subprocess.Popen(
         [str(PYTHON), "-m", "rehearse_ai"], cwd=work, env=env, stdout=subprocess.DEVNULL
@@ -149,6 +171,7 @@ def main() -> int:
         server.terminate()
         server.wait(timeout=10)
     print("\n".join(visited))
+    problems.extend(check_operational_log(Path(work) / "logs", data))
     if problems:
         print("\nPROBLEMS:\n" + "\n".join(sorted(set(problems))))
         return 1

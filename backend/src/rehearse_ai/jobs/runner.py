@@ -17,6 +17,7 @@ Design:
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rehearse_ai.database.models import InterviewJob, utcnow
+from rehearse_ai.operational_log import bound
+from rehearse_ai.operational_log import event as log_event
 
 LOGGER = logging.getLogger(__name__)
 ERROR_MAX = 64
@@ -181,7 +184,7 @@ class JobRunner:
                     self._running.add(task)
                     task.add_done_callback(self._running.discard)
             except Exception:
-                LOGGER.exception("Job claim loop error")
+                log_event(LOGGER, "job.claim_loop_failed", level=logging.ERROR, exc_info=True)
             try:
                 await asyncio.wait_for(self._wake.wait(), self.poll_secs)
             except TimeoutError:
@@ -261,26 +264,85 @@ class JobRunner:
         return count
 
     async def execute(self, job: ClaimedJob) -> None:
+        with bound(job_id=job.id, assignment_id=job.assignment_id):
+            await self._execute(job)
+
+    async def _execute(self, job: ClaimedJob) -> None:
         handler = self.handlers.get(job.kind)
         if handler is None:
+            log_event(LOGGER, "job.unknown_kind", level=logging.ERROR, job_kind=job.kind)
             await self._fail(job, "unknown_job_kind", retryable=False)
             return
+        started = time.monotonic()
+        log_event(
+            LOGGER,
+            "job.started",
+            job_kind=job.kind,
+            attempt=job.attempts,
+            max_attempts=job.max_attempts,
+        )
+
+        def elapsed_ms() -> int:
+            return round((time.monotonic() - started) * 1000)
+
         try:
             await asyncio.wait_for(handler.run(job), handler.timeout_secs)
         except asyncio.CancelledError:
             raise  # shutdown: leave the job running; recover() or its lease re-queues it
         except StaleJobError:
-            LOGGER.warning("Discarded stale %s job result", job.kind)
+            log_event(
+                LOGGER,
+                "job.stale_result_discarded",
+                level=logging.WARNING,
+                job_kind=job.kind,
+                duration_ms=elapsed_ms(),
+            )
         except JobCancelled as exc:
+            log_event(
+                LOGGER,
+                "job.cancelled",
+                job_kind=job.kind,
+                error_code=exc.code,
+                duration_ms=elapsed_ms(),
+            )
             await self._finish(job, "cancelled", exc.code)
         except JobError as exc:
+            log_event(
+                LOGGER,
+                "job.attempt_failed",
+                level=logging.WARNING,
+                job_kind=job.kind,
+                error_code=exc.code,
+                retryable=exc.retryable,
+                duration_ms=elapsed_ms(),
+            )
             await self._fail(job, exc.code, retryable=exc.retryable)
         except TimeoutError:
+            log_event(
+                LOGGER,
+                "job.attempt_failed",
+                level=logging.WARNING,
+                job_kind=job.kind,
+                error_code="timeout",
+                retryable=True,
+                duration_ms=elapsed_ms(),
+            )
             await self._fail(job, "timeout", retryable=True)
         except Exception as exc:
-            LOGGER.error("Job %s failed with %s", job.kind, type(exc).__name__)
+            log_event(
+                LOGGER,
+                "job.attempt_failed",
+                level=logging.ERROR,
+                exc_info=True,
+                job_kind=job.kind,
+                error_code="internal_error",
+                error_type=type(exc).__name__,
+                retryable=True,
+                duration_ms=elapsed_ms(),
+            )
             await self._fail(job, "internal_error", retryable=True)
         else:
+            log_event(LOGGER, "job.succeeded", job_kind=job.kind, duration_ms=elapsed_ms())
             await self._finish(job, "succeeded", None)
 
     async def _finish(self, job: ClaimedJob, status: str, code: str | None) -> bool:
@@ -325,9 +387,26 @@ class JobRunner:
                     )
                 )
             if result.rowcount != 1:
-                LOGGER.warning("Could not re-queue stale %s job", job.kind)
+                log_event(LOGGER, "job.requeue_lost", level=logging.WARNING, job_kind=job.kind)
+            else:
+                log_event(
+                    LOGGER,
+                    "job.retry_scheduled",
+                    job_kind=job.kind,
+                    error_code=code,
+                    attempt=job.attempts,
+                    delay_secs=delay,
+                )
             return
         if await self._finish(job, "failed", code):
+            log_event(
+                LOGGER,
+                "job.failed",
+                level=logging.ERROR,
+                job_kind=job.kind,
+                error_code=code,
+                attempts=job.attempts,
+            )
             await self._notify_exhausted(job, code)
 
     async def _notify_exhausted(self, job: ClaimedJob, code: str) -> None:
@@ -337,4 +416,11 @@ class JobRunner:
         try:
             await handler.exhausted(job, code)
         except Exception as exc:
-            LOGGER.error("Job exhaustion handler failed with %s", type(exc).__name__)
+            log_event(
+                LOGGER,
+                "job.exhaustion_handler_failed",
+                level=logging.ERROR,
+                exc_info=True,
+                job_kind=job.kind,
+                error_type=type(exc).__name__,
+            )

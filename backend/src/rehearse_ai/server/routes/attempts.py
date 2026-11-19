@@ -1,5 +1,6 @@
 """The candidate's interview attempt: starting the voice connection and the one room image."""
 
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
@@ -8,12 +9,14 @@ from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequest
 
 from rehearse_ai.database.models import InterviewRecord
 from rehearse_ai.invitations.access import candidate_session
+from rehearse_ai.operational_log import event as log_event
 from rehearse_ai.records.images import KINDS, LIMITS
 from rehearse_ai.records.service import accept_interview_image, fail_attempt_start
 from rehearse_ai.server.dependencies import Ctx, Db
 from rehearse_ai.voice.pipeline import LiveSession
 
 router = APIRouter()
+LOGGER = logging.getLogger(__name__)
 
 
 def parse_offer(body: object) -> SmallWebRTCRequest:
@@ -47,8 +50,18 @@ async def offer(ctx: Ctx, request: Request, db: Db) -> dict[str, str]:
             assignment.id, ctx.build_id, ctx.prompt_version
         )
     except ValueError as exc:
+        log_event(
+            LOGGER, "interview.attempt_refused", level=logging.WARNING, assignment_id=assignment.id
+        )
         raise HTTPException(409, str(exc)) from exc
     record_id = attempt.record_id
+    log_event(
+        LOGGER,
+        "interview.attempt_started",
+        assignment_id=assignment.id,
+        record_id=record_id,
+        plan_version_id=attempt.version_id,
+    )
 
     async def connected(connection: object) -> None:
         live = LiveSession(
@@ -69,6 +82,14 @@ async def offer(ctx: Ctx, request: Request, db: Db) -> dict[str, str]:
         ctx.live.start(live)
 
     async def fail(reason: str) -> None:
+        log_event(
+            LOGGER,
+            "interview.attempt_start_failed",
+            level=logging.ERROR,
+            assignment_id=assignment.id,
+            record_id=record_id,
+            reason=reason,
+        )
         await fail_attempt_start(
             ctx.db_sessions,
             ctx.store,

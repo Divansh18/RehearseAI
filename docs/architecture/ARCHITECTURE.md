@@ -54,7 +54,7 @@ RehearseAI/
 
 Private runtime data is **not** in the tree: `sessions/`, `private_documents/`, `private_pdfs/` and
 `private_snapshots/` are created next to where the server runs (the repository root) and are
-git-ignored. See [Packaging and private storage](#packaging-and-private-storage).
+git-ignored. Operational logs go to `logs/` (resolved explicitly; see [LOGGING.md](LOGGING.md)). See [Packaging and private storage](#packaging-and-private-storage).
 
 ```
 backend/src/rehearse_ai/
@@ -63,6 +63,13 @@ backend/src/rehearse_ai/
   database/            PostgreSQL access (imports nothing else from the application)
     models.py            every SQLAlchemy model and the one ORM metadata registry
     connection.py        open_database(): how engines and session factories are made
+  operational_log/     structured JSON operational logging (imports only config)
+    events.py            event(): the one way to write an operational event
+    context.py           correlation ids (request, assignment, record, job)
+    redaction.py         field-name and value scrubbing
+    formatter.py         the JSON envelope; exception class and location, never the message
+    handlers.py          bounded non-blocking queue, rotating files with age pruning
+    configuration.py     configure_logging(): path resolution, one configuration, clean shutdown
   jobs/                durable background jobs shared by scheduling and plans
     runner.py            PostgreSQL-backed runner: leases, fenced results, retries
   prompts/             versioned LLM prompts (*.txt) and load_prompt()
@@ -88,7 +95,8 @@ backend/src/rehearse_ai/
     speech_output.py     provider speech contexts <-> utterances, audio counts
     timeline.py          server-side stage timings behind the response_latency event
     browser_events.py    allowlist of events the candidate's browser may see
-    session_log.py       ordered JSONL evidence per attempt
+    session_log.py       ordered JSONL evidence per attempt (the protected conversation file)
+    operational_events.py  allowlist of session events mirrored, text-free, to the operational log
   voice/               Pipecat pipeline and providers
     pipeline.py          LiveSession: assembles STT -> LLM -> TTS and adapts frames to the interview
     interruption.py      when sound becomes a committed interruption (tentative vs committed)
@@ -109,6 +117,7 @@ backend/src/rehearse_ai/
     pages.py             HTML shells, /assets allowlist, home, health
     frontend.py          where the frontend files are read from (installed copy or frontend/)
     build.py             source and prompt fingerprints
+    request_logging.py   request ids and logging of failed HTTP requests
     routes/              one router per capability: auth, candidate, assignments, records, attempts
 ```
 
@@ -119,14 +128,15 @@ the packages listed for it.
 
 ```
 database, config, prompts                import nothing from rehearse_ai
-jobs ............ database
+operational_log . config                 (a leaf: any package may log through it)
+jobs ............ database, operational_log
 accounts ........ config, database
 plans ........... jobs, database, prompts
 invitations ..... database, plans
-records ......... database, plans
+records ......... database, operational_log, plans
 scheduling ...... accounts, invitations, jobs, database, plans
-interview ....... plans                  (a constant) and no framework or vendor SDK at all
-voice ........... config, interview, prompts
+interview ....... operational_log, plans (a constant); no framework or vendor SDK at all
+voice ........... config, interview, operational_log, prompts
 server .......... everything above; nothing else imports server (only __main__ does)
 ```
 
@@ -210,6 +220,7 @@ evidence only.
 | Add a route | the router for its capability in `server/routes/`; register it in `server/app.py` |
 | Add a table or column | `database/models.py` **and** a new additive migration in `backend/migrations/versions/` |
 | Change a page | `frontend/pages/`, `frontend/scripts/<audience>/`, `frontend/styles/` (and `server/pages.py` `ASSETS`); `backend/setup.py` only if a new *kind* of file is added |
+| Add or change a log event, or what is logged | `operational_log/` (`event()`), `interview/operational_events.py` for saved-conversation events; rules in [LOGGING.md](LOGGING.md) |
 | Change a runtime prompt | `prompts/*.txt` (documented in `docs/product/PROMPTS.md`) |
 | Change a command or how the project is built | `Makefile`, `backend/pyproject.toml`, `backend/setup.py`, `CONTRIBUTING.md` |
 | Document a decision | `docs/architecture/` (structure), `docs/product/` (behaviour), `docs/testing/` (checks); dated measurements go in `docs/historical/` or a clearly dated report |
@@ -259,7 +270,11 @@ checkout. Prompts (`prompts/*.txt`) and the PDF font and licence (`records/fonts
 package data in `backend/pyproject.toml`. Public asset URLs (`/assets/scripts/...`,
 `/assets/styles/...`) and the allowlist in `server/pages.py` do not depend on any of this.
 
-**Where relative paths resolve.** Configuration and storage paths are relative to the *working
+**Logs.** Operational logs are the exception to the working-directory rule: `REHEARSE_LOG_DIR` is
+resolved to an absolute path (repository root in a checkout, else the working directory) so the
+location does not depend on where the server was started. See [LOGGING.md](LOGGING.md).
+
+**Where relative paths resolve.** Configuration and the other storage paths are relative to the *working
 directory*, not to the package or to `backend/`: `.env`, `sessions/`, `private_documents/`,
 `private_pdfs/` and `private_snapshots/` (and the Alembic `DATABASE_URL` read from `.env`). Run every
 command from the repository root, as the `Makefile` and the documented commands do, so those

@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import logging
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -40,9 +42,13 @@ from rehearse_ai.config import Settings
 from rehearse_ai.interview.controller import Stage, Utterance
 from rehearse_ai.interview.session import InterviewSession
 from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.operational_log import bound
+from rehearse_ai.operational_log import event as log_event
 from rehearse_ai.prompts import load_prompt
 from rehearse_ai.voice.interruption import ConfirmedSpeechStartStrategy
 from rehearse_ai.voice.tts import UtteranceMarkerFrame, build_tts_service
+
+LOGGER = logging.getLogger(__name__)
 
 OPENING_SCHEMA = {
     "type": "object",
@@ -358,6 +364,7 @@ class LiveSession:
     ) -> None:
         self.connection = connection
         self.assignment_id = assignment_id
+        self.tts_provider = settings.tts_provider
         self.log = SessionLog(settings.session_dir, session_id or str(uuid.uuid4()), event_sink)
         if assignment_id is not None:
             self.log.record("assignment_session_authenticated", assignment_id=assignment_id)
@@ -489,12 +496,19 @@ class LiveSession:
                     await self.session.media_resume()
 
     async def run(self) -> None:
+        with bound(record_id=self.log.session_id, assignment_id=self.assignment_id):
+            await self._run()
+
+    async def _run(self) -> None:
         failed = False
+        started = time.monotonic()
+        log_event(LOGGER, "voice.session_started", provider=self.tts_provider)
         try:
             await self.runner.add_workers(self.worker)
             await self.runner.run()
         except Exception:
             failed = True
+            log_event(LOGGER, "voice.pipeline_failed", level=logging.ERROR, exc_info=True)
             self.session.pipeline_error(
                 processor="PipelineWorker",
                 category="unexpected_failure",
@@ -504,6 +518,12 @@ class LiveSession:
             raise
         finally:
             await self.session.close(failed=failed)
+            log_event(
+                LOGGER,
+                "voice.session_stopped",
+                failed=failed,
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
 
     async def stop(self) -> None:
         await self.session.close()

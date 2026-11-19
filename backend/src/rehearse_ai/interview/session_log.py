@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from rehearse_ai.interview.operational_events import mirror
+
 
 class SessionLog:
     def __init__(
@@ -57,6 +59,10 @@ class SessionLog:
         }
         self._file.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._file.flush()
+        try:
+            mirror(entry)  # the allowlisted, text-free subset only; never affects the evidence file
+        except Exception:
+            pass
         if (
             self.event_sink is not None
             and not self.event_sink(entry)

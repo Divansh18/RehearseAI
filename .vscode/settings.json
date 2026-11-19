@@ -20,6 +20,7 @@
     "private_pdfs": true,
     "private_snapshots": true,
     "recordings": true,
+    "logs": true,
     "output": true
   }
 }

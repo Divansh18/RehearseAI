@@ -26,6 +26,31 @@ class ConfigurationError(ValueError):
     """A required setting is missing or invalid."""
 
 
+def repository_root() -> Path | None:
+    """The checkout this package is running from, or None when it is installed elsewhere."""
+    root = Path(__file__).resolve().parents[3]
+    return root if (root / "backend").is_dir() and (root / "frontend").is_dir() else None
+
+
+@dataclass(frozen=True)
+class LogSettings:
+    """Operational logging (``rehearse_ai.operational_log``); never conversation content.
+
+    A relative ``directory`` is resolved against the repository root when running from a checkout
+    and against the working directory otherwise, so starting from the root or from ``backend/``
+    writes to the same place. The resolved absolute path is logged at startup.
+    """
+
+    directory: Path = Path("logs")
+    level: str = "INFO"
+    console: bool = True
+    files: bool = True
+    max_bytes: int = 10 * 1024 * 1024
+    backups: int = 5
+    retention_days: int = 14
+    queue_size: int = 10_000
+
+
 @dataclass(frozen=True)
 class AuthConfig:
     database_url: str = field(
@@ -77,6 +102,7 @@ class Settings:
     turn_pause_secs: float = 1.1
     interrupt_confirm_secs: float = 0.5
     interrupt_transcript_grace_secs: float = 0.5
+    log: LogSettings = field(default_factory=LogSettings)
     auth: AuthConfig = field(default_factory=AuthConfig)
 
     @classmethod
@@ -115,6 +141,29 @@ class Settings:
             if not low <= result <= high:
                 raise ConfigurationError(f"{name} must be between {low} and {high}")
             return result
+
+        def switch(name: str, default: str) -> bool:
+            raw = values.get(name, default).strip().lower()
+            if raw not in {"on", "off"}:
+                raise ConfigurationError(f"{name} must be on or off")
+            return raw == "on"
+
+        log_level = values.get("REHEARSE_LOG_LEVEL", "INFO").strip().upper()
+        if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+            raise ConfigurationError("REHEARSE_LOG_LEVEL must be DEBUG, INFO, WARNING or ERROR")
+        log_directory = values.get("REHEARSE_LOG_DIR", "logs").strip()
+        if not log_directory:
+            raise ConfigurationError("REHEARSE_LOG_DIR must not be empty")
+        log_settings = LogSettings(
+            directory=Path(log_directory),
+            level=log_level,
+            console=switch("REHEARSE_LOG_CONSOLE", "on"),
+            files=switch("REHEARSE_LOG_FILES", "on"),
+            max_bytes=int(number("REHEARSE_LOG_MAX_MB", "10", low=1, high=1024) * 1024 * 1024),
+            backups=int(number("REHEARSE_LOG_BACKUPS", "5", low=1, high=100)),
+            retention_days=int(number("REHEARSE_LOG_RETENTION_DAYS", "14", low=1, high=3650)),
+            queue_size=int(number("REHEARSE_LOG_QUEUE_SIZE", "10000", low=100, high=1_000_000)),
+        )
 
         job_runner = values.get("REHEARSE_JOB_RUNNER", "on").strip().lower()
         if job_runner not in {"on", "off"}:
@@ -262,6 +311,7 @@ class Settings:
             interrupt_transcript_grace_secs=number(
                 "REHEARSE_INTERRUPT_TRANSCRIPT_GRACE_SECS", "0.5", low=0.0, high=1.0
             ),
+            log=log_settings,
             auth=AuthConfig(
                 database_url=database_url,
                 secret=secret,

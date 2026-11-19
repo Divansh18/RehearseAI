@@ -85,6 +85,7 @@ PDF and DOCX only, up to 5 MB, PDFs up to 10 pages, text up to 30,000 (résumé)
 ### Storage and retention limitations (this milestone)
 
 - Uploaded originals are kept in `private_documents/` (mode 0600), and extracted résumé/job-description text, private instructions and generated plans are kept in PostgreSQL **indefinitely**. There is **no automatic deletion, retention schedule, redaction, export or erase-on-request** in this milestone.
+- Operational logs (`logs/`, rotated, 14 days by default) are structured JSON with ids, counts, timings and error codes only: no candidate names, emails, documents, transcripts or model text. See [LOGGING.md](docs/architecture/LOGGING.md). They are separate from `sessions/`, which *does* contain conversation text.
 - Interview-room images (`private_snapshots/`; older records may hold a camera-only still), PDFs (`private_pdfs/`), raw session logs (`sessions/`) and the database are local, unencrypted at rest and not backed up by the application.
 - Contents are never written to application logs, but they are stored and sent to the OpenAI, Deepgram and Cartesia services as described. Review those providers' terms and your own legal obligations before using real candidate data.
 
@@ -123,7 +124,7 @@ Real devices and provider keys are required for step 6. Screen capture may be un
 
 | Document | Covers |
 | --- | --- |
-| [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md), [CONTRIBUTING.md](CONTRIBUTING.md) | Code layout, dependency direction, state ownership, how to work on it and verify |
+| [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md), [LOGGING.md](docs/architecture/LOGGING.md), [CONTRIBUTING.md](CONTRIBUTING.md) | Code layout, dependency direction, state ownership, logging and diagnostics, how to work on it and verify |
 | [PRODUCT_WORKFLOW.md](docs/product/PRODUCT_WORKFLOW.md), [PLAN.md](docs/product/PLAN.md), [PRODUCT_CLEANUP.md](docs/product/PRODUCT_CLEANUP.md) | Product behaviour, current state and known limits, what was retired |
 | [PROMPTS.md](docs/product/PROMPTS.md) | The live prompts and what the model is given |
 | [MODELS_AND_MIGRATIONS.md](docs/architecture/MODELS_AND_MIGRATIONS.md) | How the ORM models and the migrations are kept in agreement |

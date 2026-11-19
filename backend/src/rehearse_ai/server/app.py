@@ -5,6 +5,7 @@ the voice-session registry. Routes reach them through ``ServerContext`` (see ``d
 Business rules live in the capability packages, not here.
 """
 
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -27,6 +28,8 @@ from rehearse_ai.database.models import (
     utcnow,
 )
 from rehearse_ai.jobs.runner import JobRunner
+from rehearse_ai.operational_log import configure_logging
+from rehearse_ai.operational_log import event as log_event
 from rehearse_ai.plans.preparation import (
     OpenAIPlanGenerator,
     PrepareHandler,
@@ -37,8 +40,11 @@ from rehearse_ai.scheduling.service import InviteHandler
 from rehearse_ai.server import pages
 from rehearse_ai.server.build import prompt_version, source_build_id
 from rehearse_ai.server.context import ServerContext
+from rehearse_ai.server.request_logging import RequestLoggingMiddleware
 from rehearse_ai.server.routes import assignments, attempts, auth, candidate, records
 from rehearse_ai.voice.registry import LiveSessionRegistry
+
+LOGGER = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -77,6 +83,7 @@ def create_app(settings: Settings) -> FastAPI:
                 await db.execute(select(InterviewPlan.id).limit(1))
                 await db.execute(select(InterviewJob.id).limit(1))
         except SQLAlchemyError:
+            log_event(LOGGER, "app.startup_failed", level=logging.CRITICAL, reason="database")
             raise RuntimeError(
                 "Interview database is unavailable or unmigrated. "
                 "Start PostgreSQL and run `uv run alembic upgrade head`."
@@ -93,14 +100,31 @@ def create_app(settings: Settings) -> FastAPI:
         await store.start()
         if settings.job_runner:
             await runner.start()
+        log_event(
+            LOGGER,
+            "app.started",
+            host=settings.host,
+            port=settings.port,
+            environment=settings.auth.environment,
+            job_runner=settings.job_runner,
+            tts_provider=settings.tts_provider,
+            session_dir=str(settings.session_dir.resolve()),
+            pdf_dir=str(settings.pdf_dir.resolve()),
+            snapshot_dir=str(settings.snapshot_dir.resolve()),
+            document_dir=str(settings.document_dir.resolve()),
+            prompt_version=prompt_version(),
+        )
         yield
+        log_event(LOGGER, "app.stopping", running_voice_sessions=len(live.sessions))
         await runner.stop()
         await live.shutdown()
         await store.stop()
         await webrtc.close()
         await engine.dispose()
+        log_event(LOGGER, "app.stopped")
 
     app = FastAPI(lifespan=lifespan)
+    app.add_middleware(RequestLoggingMiddleware)
     app.state.context = ServerContext(
         settings=settings,
         build_id=build_id,
@@ -145,6 +169,10 @@ def main() -> None:
         settings = Settings.load()
     except ConfigurationError as exc:
         raise SystemExit(f"Configuration error: {exc}") from None
-    app = create_app(settings)
-    print(f"RehearseAI build {app.state.build_id}", flush=True)
-    uvicorn.run(app, host=settings.host, port=settings.port, access_log=False)
+    logging_handle = configure_logging(settings.log, build_id=source_build_id())
+    try:
+        app = create_app(settings)
+        print(f"RehearseAI build {app.state.build_id}", flush=True)
+        uvicorn.run(app, host=settings.host, port=settings.port, access_log=False)
+    finally:
+        logging_handle.shutdown()

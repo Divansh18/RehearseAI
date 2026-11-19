@@ -20,6 +20,7 @@ from rehearse_ai.database.models import (
     InterviewRecord,
     TranscriptEntry,
 )
+from rehearse_ai.operational_log import event as log_event
 from rehearse_ai.plans.schema import InterviewPlanContent
 from rehearse_ai.records.conversation_pdf import build_pdf
 
@@ -106,7 +107,13 @@ class InterviewStore:
             await asyncio.wait_for(self.events.join(), timeout=15)
             await asyncio.wait_for(self.pdf_jobs.join(), timeout=30)
         except TimeoutError:
-            LOGGER.error("Persistence flush timed out; raw logs and PDF jobs remain for restart")
+            log_event(
+                LOGGER,
+                "persistence.flush_timed_out",
+                level=logging.ERROR,
+                pending_events=self.events.qsize(),
+                pending_pdfs=self.pdf_jobs.qsize(),
+            )
         for task in (self._event_task, self._pdf_task):
             if task is not None:
                 task.cancel()
@@ -202,7 +209,13 @@ class InterviewStore:
             return True
         except asyncio.QueueFull:
             self.failed_ids.add(session_id)
-            LOGGER.error("Interview persistence queue full for session %s", session_id)
+            log_event(
+                LOGGER,
+                "persistence.queue_full",
+                level=logging.ERROR,
+                record_id=session_id,
+                queue_name="events",
+            )
             return False
 
     async def _notify_failure(self, session_id: str) -> None:
@@ -219,11 +232,23 @@ class InterviewStore:
                 session_id = event["session_id"]
                 if session_id not in self.failed_ids:
                     self.failed_ids.add(session_id)
-                    LOGGER.exception("Interview persistence failed for session %s", session_id)
+                    log_event(
+                        LOGGER,
+                        "persistence.write_failed",
+                        level=logging.ERROR,
+                        exc_info=True,
+                        record_id=session_id,
+                    )
                     try:
                         await self._notify_failure(session_id)
                     except Exception:
-                        LOGGER.exception("Could not notify browser of persistence failure")
+                        log_event(
+                            LOGGER,
+                            "persistence.notify_failed",
+                            level=logging.ERROR,
+                            exc_info=True,
+                            record_id=session_id,
+                        )
             finally:
                 self.events.task_done()
 
@@ -391,9 +416,11 @@ class InterviewStore:
                     try:
                         event = json.loads(line)
                     except json.JSONDecodeError:
-                        LOGGER.error(
-                            "Invalid raw log tail for session %s; leaving source unchanged",
-                            record_id,
+                        log_event(
+                            LOGGER,
+                            "persistence.raw_log_tail_invalid",
+                            level=logging.ERROR,
+                            record_id=record_id,
                         )
                         break
                     if (
@@ -408,6 +435,12 @@ class InterviewStore:
                     record.termination_reason = "server_restart"
                     record.ended_at = datetime.now(UTC)
                     record.pdf_status = "pending"
+                    log_event(
+                        LOGGER,
+                        "persistence.attempt_interrupted_by_restart",
+                        level=logging.WARNING,
+                        record_id=record_id,
+                    )
                     if record.assignment_id:
                         assignment = await db.get(InterviewAssignment, record.assignment_id)
                         assignment.status = "interrupted"
@@ -419,7 +452,13 @@ class InterviewStore:
             self.pdf_jobs.put_nowait(record_id)
             return True
         except asyncio.QueueFull:
-            LOGGER.error("PDF queue full; interview %s remains pending", record_id)
+            log_event(
+                LOGGER,
+                "pdf.queue_full",
+                level=logging.ERROR,
+                record_id=record_id,
+                queue_name="pdf",
+            )
             return False
 
     async def _make_pdfs(self) -> None:
@@ -428,7 +467,13 @@ class InterviewStore:
             try:
                 await self.generate_pdf(record_id)
             except Exception:
-                LOGGER.exception("PDF generation failed for interview %s", record_id)
+                log_event(
+                    LOGGER,
+                    "pdf.generation_failed",
+                    level=logging.ERROR,
+                    exc_info=True,
+                    record_id=record_id,
+                )
             finally:
                 self.pdf_jobs.task_done()
 
@@ -550,7 +595,14 @@ class InterviewStore:
                         pdf_error=type(exc).__name__,
                     )
                 )
-            LOGGER.exception("PDF generation error for interview %s", record_id)
+            log_event(
+                LOGGER,
+                "pdf.generation_failed",
+                level=logging.ERROR,
+                exc_info=True,
+                record_id=record_id,
+                error_type=type(exc).__name__,
+            )
             self._snapshot_events.pop(record_id, None)
             return False
         async with self.db_sessions.begin() as db:
@@ -563,6 +615,7 @@ class InterviewStore:
                 )
             )
         self._snapshot_events.pop(record_id, None)
+        log_event(LOGGER, "pdf.generated", record_id=record_id)
         return True
 
     def snapshot_path(self, record_id: uuid.UUID) -> Path:

@@ -16,6 +16,7 @@ private_pdfs/
 private_snapshots/
 /output/pdf/
 /output/ui/
+# Operational logs (REHEARSE_LOG_DIR, default logs/). Keep a custom directory outside the tree or ignored.
 logs/
 recordings/
 *.wav
