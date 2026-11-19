@@ -23,7 +23,8 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = ROOT / "backend" / ".venv" / "bin" / "python"
+# SMOKE_PYTHON points the same checks at another environment, e.g. one with the built wheel.
+PYTHON = Path(os.environ.get("SMOKE_PYTHON", ROOT / "backend" / ".venv" / "bin" / "python"))
 PORT = int(os.environ.get("SMOKE_PORT", "7971"))
 TEST_URL = os.environ.get(
     "REHEARSE_TEST_DATABASE_URL",

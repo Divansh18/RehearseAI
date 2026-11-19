@@ -48,7 +48,8 @@ styles under `rehearse_ai/web/`, the prompts, and the PDF font with its licence.
 
 Optional, outside pytest: `make smoke` (`evaluation/frontend_smoke.py`) drives every page in
 Chromium against a throwaway server and fails on console errors (needs Playwright, which is not a
-project dependency); the other scripts in `evaluation/` call real providers and use your keys, e.g.
+project dependency; `SMOKE_PYTHON=<python>` runs it against another environment, such as one with the
+built wheel installed); the other scripts in `evaluation/` call real providers and use your keys, e.g.
 `uv run --project backend python evaluation/plan_preparation_check.py`.
 
 Synthetic tests do not establish microphone recognition, browser playout, interview naturalness
