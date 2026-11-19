@@ -125,6 +125,14 @@ is a change in `voice/` and `prompts/`, never in `interview/`.
 | Tentative/committed interruption | `voice.interruption.ConfirmedSpeechStartStrategy` | Holds its own timer; cleaned up in `cleanup()` and when a turn starts. |
 | Running voice sessions | `voice.registry.LiveSessionRegistry` | Created in `server.app`, reached through `ServerContext.live`. |
 
+**Access lifecycle.** A voice session is authorised by the candidate session that opened it and is
+keyed by its assignment. The candidate leaving (`/api/candidate/logout`) revokes that candidate
+session and stops the assignment's voice sessions (`LiveSessionRegistry.stop_for_assignment`).
+Resending or cancelling an invitation requires an unstarted assignment, so no voice session can exist
+then. Administrator sign-out and password reset end only administrator sessions: administrators never
+own a voice session, and an administrator's access change must not interrupt a candidate. Server
+shutdown stops every voice session. Covered by `tests/server/test_access_lifecycle.py`.
+
 **Cancellation.** Every model response runs as a task tagged with a generation number. Anything that
 invalidates a pending response (the candidate speaking, a correction, a stop, a media pause, close)
 increments the generation and cancels the task, so a stale result can neither speak nor advance the
@@ -209,8 +217,5 @@ Honest list of what is *not* yet clean. None of it changes behaviour.
   `records`). A domain error type mapped in `server/` would let those packages drop FastAPI.
 * `alembic check` reports 13 index-name differences between the models and the migrations. They
   pre-date this structure and are not caused by it; fixing them needs a migration.
-* Two logout/reset-password loops stop live voice sessions "owned" by an administrator account
-  (`LiveSessionRegistry.disconnect_owned_by`). Voice sessions are owned by assignments, so these never
-  match today. They are kept as they were.
 * `jobs.py` sits beside the packages that use it rather than inside one of them; it is shared
   infrastructure for scheduling and plans.

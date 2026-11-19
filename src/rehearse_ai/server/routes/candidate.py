@@ -89,7 +89,11 @@ async def confirm_name(payload: NamePayload, ctx: Ctx, request: Request, db: Db)
 @router.post("/api/candidate/logout")
 async def leave_invitation(ctx: Ctx, request: Request) -> Response:
     ctx.accounts.check_csrf(request)
-    await revoke_candidate_session(ctx.db_sessions, request.cookies.get(SESSION_COOKIE))
+    assignment_id = await revoke_candidate_session(
+        ctx.db_sessions, request.cookies.get(SESSION_COOKIE)
+    )
+    if assignment_id is not None:
+        await ctx.live.stop_for_assignment(str(assignment_id))
     response = Response(status_code=204)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response

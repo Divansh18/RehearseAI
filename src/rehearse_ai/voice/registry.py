@@ -44,9 +44,14 @@ class LiveSessionRegistry:
                     {"type": "rehearseai", "event": {"event": "persistence_error"}}
                 )
 
-    async def disconnect_owned_by(self, owner_id: str) -> None:
+    async def stop_for_assignment(self, assignment_id: str) -> None:
+        """End every running voice session of one assignment.
+
+        A voice session is authorised by the candidate session that opened it, so it must not
+        outlive that access. Administrator sign-in is a different principal and never owns one.
+        """
         for live in tuple(self.sessions):
-            if live.assignment_id == owner_id:
+            if live.assignment_id == assignment_id:
                 await live.stop()
                 await live.connection.disconnect()
 

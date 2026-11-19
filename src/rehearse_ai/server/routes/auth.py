@@ -72,11 +72,8 @@ async def login(payload: PasswordPayload, ctx: Ctx, request: Request, db: Db) ->
 @router.post("/api/auth/logout")
 async def logout(ctx: Ctx, request: Request, db: Db) -> Response:
     ctx.accounts.check_csrf(request)
-    account = await ctx.accounts.current_user(request, db)
-    response = await ctx.accounts.logout(request, db)
-    if account:
-        await ctx.live.disconnect_owned_by(str(account.id))
-    return response
+    # Administrators never own a voice session, so signing out does not touch interviews.
+    return await ctx.accounts.logout(request, db)
 
 
 @router.post("/api/auth/request-reset", status_code=202)
@@ -104,6 +101,5 @@ async def request_reset(payload: EmailPayload, ctx: Ctx, request: Request, db: D
 async def reset(payload: ResetPayload, ctx: Ctx, request: Request, db: Db) -> dict[str, str]:
     ctx.accounts.check_csrf(request)
     await ctx.accounts.rate_limit(db, "reset:ip", client_address(request), limit=20, seconds=600)
-    account_id = await ctx.accounts.reset_password(db, payload.token, payload.password)
-    await ctx.live.disconnect_owned_by(str(account_id))
+    await ctx.accounts.reset_password(db, payload.token, payload.password)
     return {"message": "Password changed. Sign in again on all devices."}

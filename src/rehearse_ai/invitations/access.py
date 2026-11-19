@@ -228,10 +228,13 @@ async def confirm_self_reported_name(
 
 async def revoke_candidate_session(
     db_sessions: async_sessionmaker[AsyncSession], cookie_token: str | None
-) -> None:
+) -> uuid.UUID | None:
+    """Revoke the candidate session behind a cookie; return its assignment, if it existed."""
     if not cookie_token:
-        return
+        return None
     async with db_sessions.begin() as transaction:
         row = await transaction.get(CandidateSession, token_digest(cookie_token))
-        if row:
-            row.revoked_at = utcnow()
+        if row is None:
+            return None
+        row.revoked_at = utcnow()
+        return row.assignment_id
