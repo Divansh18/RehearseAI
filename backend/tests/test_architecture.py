@@ -15,15 +15,15 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "rehearse_ai"
 
 # package -> the other rehearse_ai packages it may import
 ALLOWED = {
-    "models": set(),
+    "database": set(),
     "config": set(),
     "prompts": set(),
-    "jobs": {"models"},
-    "accounts": {"config", "models"},
-    "plans": {"jobs", "models", "prompts"},
-    "invitations": {"models", "plans"},
-    "records": {"models", "plans"},
-    "scheduling": {"accounts", "invitations", "jobs", "models", "plans"},
+    "jobs": {"database"},
+    "accounts": {"config", "database"},
+    "plans": {"jobs", "database", "prompts"},
+    "invitations": {"database", "plans"},
+    "records": {"database", "plans"},
+    "scheduling": {"accounts", "invitations", "jobs", "database", "plans"},
     "interview": {"plans"},
     "voice": {"config", "interview", "prompts"},
     "server": {
@@ -31,7 +31,7 @@ ALLOWED = {
         "config",
         "invitations",
         "jobs",
-        "models",
+        "database",
         "plans",
         "records",
         "scheduling",

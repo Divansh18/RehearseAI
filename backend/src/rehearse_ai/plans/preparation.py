@@ -19,20 +19,20 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.jobs import (
-    ClaimedJob,
-    JobCancelled,
-    JobError,
-    StaleJobError,
-    verify_claim,
-)
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     AssignmentAudit,
     InterviewAssignment,
     InterviewPlan,
     InterviewPlanVersion,
     InterviewPreparation,
     utcnow,
+)
+from rehearse_ai.jobs.runner import (
+    ClaimedJob,
+    JobCancelled,
+    JobError,
+    StaleJobError,
+    verify_claim,
 )
 from rehearse_ai.plans.schema import QUESTION_SHARE, InterviewPlanContent
 from rehearse_ai.prompts import load_prompt

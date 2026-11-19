@@ -11,13 +11,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from rehearse_ai.accounts.cli import create_admin
 from rehearse_ai.config import AuthConfig, Settings
-from rehearse_ai.invitations.access import invitation_token, token_digest
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     Account,
     InterviewAssignment,
     InterviewPlan,
     InterviewPlanVersion,
 )
+from rehearse_ai.invitations.access import invitation_token, token_digest
 from rehearse_ai.plans.preparation import PlanProviderError
 from rehearse_ai.server import create_app
 

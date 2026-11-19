@@ -6,7 +6,12 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rehearse_ai.models import Account, InterviewAssignment, InterviewRecord, TranscriptEntry
+from rehearse_ai.database.models import (
+    Account,
+    InterviewAssignment,
+    InterviewRecord,
+    TranscriptEntry,
+)
 from rehearse_ai.records.store import TERMINAL
 
 PAGE_SIZE = 20

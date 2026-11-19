@@ -22,7 +22,7 @@ from support import (
     new_admin_email,
 )
 
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     InterviewAssignment,
     InterviewJob,
     InterviewPreparation,

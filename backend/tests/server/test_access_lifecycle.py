@@ -17,7 +17,7 @@ from support import (
     seed_assignment,
 )
 
-from rehearse_ai.models import utcnow  # noqa: F401  (kept for parity with sibling tests)
+from rehearse_ai.database.models import utcnow  # noqa: F401  (kept for parity with sibling tests)
 
 
 class FakeVoiceSession:

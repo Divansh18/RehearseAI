@@ -13,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from rehearse_ai.accounts.cli import promote
+from rehearse_ai.database.models import Account, InterviewRecord, TranscriptEntry
 from rehearse_ai.interview.session_log import SessionLog
-from rehearse_ai.models import Account, InterviewRecord, TranscriptEntry
 from rehearse_ai.records.conversation_pdf import build_pdf
 from rehearse_ai.records.images import InvalidSnapshot, save_snapshot
 from rehearse_ai.records.store import InterviewStore

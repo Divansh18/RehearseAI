@@ -21,9 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rehearse_ai.accounts.service import MailDeliveryError, Mailer
-from rehearse_ai.invitations.access import invitation_token, token_digest
-from rehearse_ai.jobs import ClaimedJob, JobCancelled, JobError, enqueue, verify_claim
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     AssignmentAudit,
     CandidateSession,
     InterviewAssignment,
@@ -31,6 +29,8 @@ from rehearse_ai.models import (
     InterviewPreparation,
     utcnow,
 )
+from rehearse_ai.invitations.access import invitation_token, token_digest
+from rehearse_ai.jobs.runner import ClaimedJob, JobCancelled, JobError, enqueue, verify_claim
 from rehearse_ai.plans.schema import InterviewPlanContent
 from rehearse_ai.scheduling.documents import (
     DocumentError,

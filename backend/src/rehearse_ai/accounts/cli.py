@@ -8,19 +8,18 @@ import os
 from dotenv import dotenv_values
 from fastapi_users import exceptions
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from rehearse_ai.accounts.service import AccountCreate, AccountService
 from rehearse_ai.config import AuthConfig
-from rehearse_ai.models import Account
+from rehearse_ai.database.connection import open_database
+from rehearse_ai.database.models import Account
 
 
 async def promote(email: str, database_url: str) -> str:
     if not database_url.startswith("postgresql+asyncpg://"):
         raise ValueError("DATABASE_URL must be a PostgreSQL asyncpg URL")
-    engine = create_async_engine(database_url)
+    engine, sessions = open_database(database_url)
     try:
-        sessions = async_sessionmaker(engine)
         async with sessions.begin() as db:
             user = await db.scalar(select(Account).where(Account.email == email.strip().casefold()))
             if user is None:
@@ -37,8 +36,7 @@ async def promote(email: str, database_url: str) -> str:
 async def create_admin(email: str, password: str, database_url: str, secret: str) -> str:
     if not database_url.startswith("postgresql+asyncpg://"):
         raise ValueError("DATABASE_URL must be a PostgreSQL asyncpg URL")
-    engine = create_async_engine(database_url)
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    engine, sessions = open_database(database_url)
     try:
         service = AccountService(AuthConfig(database_url=database_url, secret=secret), sessions)
         async with sessions() as db:

@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequest
 
+from rehearse_ai.database.models import InterviewRecord
 from rehearse_ai.invitations.access import candidate_session
-from rehearse_ai.models import InterviewRecord
 from rehearse_ai.records.images import KINDS, LIMITS
 from rehearse_ai.records.service import accept_interview_image, fail_attempt_start
 from rehearse_ai.server.dependencies import Ctx, Db

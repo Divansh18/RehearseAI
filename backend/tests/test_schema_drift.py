@@ -23,7 +23,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 from support import TEST_URL
 
-from rehearse_ai.models import Base
+from rehearse_ai.database.models import Base
 
 CATALOGUE = {
     "indexes": (

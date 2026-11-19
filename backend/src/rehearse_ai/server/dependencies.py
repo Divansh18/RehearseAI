@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rehearse_ai.models import Account
+from rehearse_ai.database.models import Account
 from rehearse_ai.server.context import ServerContext
 
 

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from support import TEST_URL
 
+from rehearse_ai.database.models import Account, InterviewRecord
 from rehearse_ai.interview.budget import (
     ActiveClock,
     RemainingQuestion,
@@ -18,7 +19,6 @@ from rehearse_ai.interview.budget import (
 from rehearse_ai.interview.controller import Stage
 from rehearse_ai.interview.session import InterviewSession
 from rehearse_ai.interview.session_log import SessionLog
-from rehearse_ai.models import Account, InterviewRecord
 from rehearse_ai.records.store import InterviewStore
 
 CLOSING = "That concludes the interview. Thank you for your time, Nyla."

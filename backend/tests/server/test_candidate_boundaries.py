@@ -22,14 +22,14 @@ from support import (
     seed_assignment,
 )
 
-from rehearse_ai.interview.browser_events import candidate_event
-from rehearse_ai.interview.session import InterviewSession
-from rehearse_ai.interview.session_log import SessionLog
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     CandidateSession,
     InterviewAssignment,
     InterviewRecord,
 )
+from rehearse_ai.interview.browser_events import candidate_event
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
 
 PRIVATE_MARKERS = (SECRET_GUIDANCE, SECRET_BASIS, SECRET_EVIDENCE)
 

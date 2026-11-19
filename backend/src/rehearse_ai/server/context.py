@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rehearse_ai.accounts.service import AccountService
 from rehearse_ai.config import Settings
-from rehearse_ai.jobs import JobRunner
+from rehearse_ai.jobs.runner import JobRunner
 from rehearse_ai.records.store import InterviewStore
 from rehearse_ai.voice.registry import LiveSessionRegistry
 

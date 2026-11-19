@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.models import InterviewAssignment, InterviewRecord, utcnow
+from rehearse_ai.database.models import InterviewAssignment, InterviewRecord, utcnow
 from rehearse_ai.records.images import InvalidSnapshot, save_snapshot
 from rehearse_ai.records.store import TERMINAL, InterviewStore
 

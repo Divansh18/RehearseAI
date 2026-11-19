@@ -24,7 +24,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rehearse_ai.config import AuthConfig
-from rehearse_ai.models import Account, AccountSessionToken, ActionToken, RateBucket, utcnow
+from rehearse_ai.database.models import (
+    Account,
+    AccountSessionToken,
+    ActionToken,
+    RateBucket,
+    utcnow,
+)
 
 
 def digest(value: str) -> str:

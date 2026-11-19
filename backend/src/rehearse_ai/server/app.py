@@ -14,12 +14,11 @@ from fastapi.responses import JSONResponse
 from pipecat.transports.smallwebrtc.request_handler import SmallWebRTCRequestHandler
 from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from rehearse_ai.accounts.service import AccountService
 from rehearse_ai.config import ConfigurationError, Settings
-from rehearse_ai.jobs import JobRunner
-from rehearse_ai.models import (
+from rehearse_ai.database.connection import open_database
+from rehearse_ai.database.models import (
     Account,
     InterviewAssignment,
     InterviewJob,
@@ -27,6 +26,7 @@ from rehearse_ai.models import (
     InterviewRecord,
     utcnow,
 )
+from rehearse_ai.jobs.runner import JobRunner
 from rehearse_ai.plans.preparation import (
     OpenAIPlanGenerator,
     PrepareHandler,
@@ -43,8 +43,7 @@ from rehearse_ai.voice.registry import LiveSessionRegistry
 
 def create_app(settings: Settings) -> FastAPI:
     build_id = source_build_id()
-    engine = create_async_engine(settings.auth.database_url, pool_pre_ping=True)
-    db_sessions = async_sessionmaker(engine, expire_on_commit=False)
+    engine, db_sessions = open_database(settings.auth.database_url, pool_pre_ping=True)
     accounts = AccountService(settings.auth, db_sessions)
     webrtc = SmallWebRTCRequestHandler()
     live = LiveSessionRegistry()

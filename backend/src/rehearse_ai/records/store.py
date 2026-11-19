@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     Account,
     InterviewAssignment,
     InterviewPlanVersion,

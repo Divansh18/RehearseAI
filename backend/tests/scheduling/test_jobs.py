@@ -21,8 +21,7 @@ from support import (
 )
 
 from rehearse_ai.accounts.service import MailDeliveryError
-from rehearse_ai.jobs import JobRunner
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     Account,
     InterviewAssignment,
     InterviewJob,
@@ -30,6 +29,7 @@ from rehearse_ai.models import (
     InterviewPreparation,
     InterviewRecord,
 )
+from rehearse_ai.jobs.runner import JobRunner
 from rehearse_ai.plans.preparation import (
     PlanProviderError,
     PlanQualityError,
@@ -118,7 +118,7 @@ class Env:
             )
 
     async def enqueue_revision(self, assignment_id, request="Add a question about testing"):
-        from rehearse_ai.jobs import enqueue
+        from rehearse_ai.jobs.runner import enqueue
 
         async with self.db.begin() as db:
             assignment = await db.get(InterviewAssignment, assignment_id)
@@ -321,7 +321,7 @@ async def test_invitation_failures_retry_then_recover_and_are_not_duplicated(env
     assert assignment.mail_status == "sent" and jobs["invite"].status == "succeeded"
     assert len(sent) == 1
     # A re-run of a finished delivery must not send (and rotate the link) a second time.
-    from rehearse_ai.jobs import ClaimedJob
+    from rehearse_ai.jobs.runner import ClaimedJob
     from rehearse_ai.scheduling.service import InviteHandler
 
     handler = InviteHandler(env.db, lambda: env.app.state.accounts.mailer)

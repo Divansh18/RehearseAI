@@ -14,8 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.jobs import enqueue
-from rehearse_ai.models import (
+from rehearse_ai.database.models import (
     AssignmentAudit,
     CandidateSession,
     InterviewAssignment,
@@ -24,6 +23,7 @@ from rehearse_ai.models import (
     InterviewPreparation,
     utcnow,
 )
+from rehearse_ai.jobs.runner import enqueue
 
 
 def _local(instant, zone: str) -> str:
