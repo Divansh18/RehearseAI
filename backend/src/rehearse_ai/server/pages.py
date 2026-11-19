@@ -3,11 +3,9 @@
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from rehearse_ai.server.build import PACKAGE_DIR
 from rehearse_ai.server.context import ServerContext
 from rehearse_ai.server.dependencies import Ctx, Db
-
-WEB_DIR = PACKAGE_DIR / "web"
+from rehearse_ai.server.frontend import FRONTEND_DIR
 
 # Only these files are served, under /assets/<path>. A page may load nothing else.
 ASSETS = frozenset(
@@ -30,7 +28,7 @@ router = APIRouter()
 
 
 def render_page(ctx: ServerContext, name: str) -> HTMLResponse:
-    html = (WEB_DIR / "pages" / name).read_text(encoding="utf-8")
+    html = (FRONTEND_DIR / "pages" / name).read_text(encoding="utf-8")
     return HTMLResponse(
         html.replace("__BUILD_ID__", ctx.build_id),
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
@@ -46,7 +44,7 @@ def sign_in_redirect(ctx: ServerContext, request: Request) -> RedirectResponse:
 async def asset(name: str) -> Response:
     if name not in ASSETS:
         raise HTTPException(404)
-    path = WEB_DIR / name
+    path = FRONTEND_DIR / name
     media = "text/javascript" if name.endswith(".js") else "text/css"
     return Response(path.read_text(encoding="utf-8"), media_type=media)
 

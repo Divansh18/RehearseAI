@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = readFileSync(new URL('../../src/rehearse_ai/web/scripts/candidate/interview_room.js', import.meta.url), 'utf8');
-const mediaSource = readFileSync(new URL('../../src/rehearse_ai/web/scripts/candidate/media_setup.js', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../scripts/candidate/interview_room.js', import.meta.url), 'utf8');
+const mediaSource = readFileSync(new URL('../scripts/candidate/media_setup.js', import.meta.url), 'utf8');
 
 class TextNode {
   constructor(value) { this.textContent = value; this.parent = null; }

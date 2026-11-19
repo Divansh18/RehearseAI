@@ -31,12 +31,10 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The frontend is not listed here: backend/setup.py copies frontend/ into the build (see there).
 [tool.setuptools.package-data]
 rehearse_ai = [
     "prompts/*.txt",
-    "web/pages/*.html",
-    "web/scripts/*/*.js",
-    "web/styles/*.css",
     "records/fonts/*.ttf",
     "records/fonts/OFL.txt",
 ]
