@@ -40,7 +40,7 @@ def normalise_email(value: str) -> str:
 @router.get("/login")
 @router.get("/reset-password")
 async def account_page(ctx: Ctx) -> HTMLResponse:
-    return render_page(ctx, "account.html")
+    return render_page(ctx, "sign_in.html")
 
 
 @router.get("/api/csrf")

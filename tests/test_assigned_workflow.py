@@ -354,7 +354,9 @@ def test_admin_plan_invitation_and_restricted_candidate_session(tmp_path, monkey
         return {"sdp": "synthetic-answer", "type": "answer"}
 
     monkeypatch.setattr("rehearse_ai.server.routes.attempts.LiveSession", FakeLiveSession)
-    monkeypatch.setattr("rehearse_ai.server.app.SmallWebRTCRequestHandler.handle_web_request", accept)
+    monkeypatch.setattr(
+        "rehearse_ai.server.app.SmallWebRTCRequestHandler.handle_web_request", accept
+    )
     admin_email = f"admin-{uuid.uuid4().hex}@example.com"
     asyncio.run(
         create_admin(admin_email, PASSWORD, TEST_URL, "test-secret-at-least-thirty-two-characters")

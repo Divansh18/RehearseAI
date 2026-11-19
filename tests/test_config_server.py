@@ -148,12 +148,12 @@ def test_local_browser_assets_and_health_load_without_provider_calls(tmp_path):
         assert page.status_code == 200
         assert "Sign in" in page.text
         assert page.headers["cache-control"] == "no-store"
-        assert client.get("/assets/app.js").status_code == 200
-        assert client.get("/assets/media_setup.js").status_code == 200
-        assert client.get("/assets/styles.css").status_code == 200
-        theme = client.get("/assets/theme.css")
+        assert client.get("/assets/scripts/candidate/interview_room.js").status_code == 200
+        assert client.get("/assets/scripts/candidate/media_setup.js").status_code == 200
+        assert client.get("/assets/styles/interview_room.css").status_code == 200
+        theme = client.get("/assets/styles/theme.css")
         assert theme.status_code == 200 and theme.headers["content-type"].startswith("text/css")
-        assert client.get("/assets/account.js").status_code == 200
+        assert client.get("/assets/scripts/admin/sign_in.js").status_code == 200
         assert client.get("/interview", follow_redirects=False).status_code == 401
         assert client.post("/api/offer", json={"type": "bad"}).status_code == 401
 

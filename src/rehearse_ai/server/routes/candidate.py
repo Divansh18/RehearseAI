@@ -31,7 +31,7 @@ async def join_page(ctx: Ctx, token: str) -> Response:
     # Rendering the shell is read-only. Crawlers and email scanners never redeem.
     if len(token) < 32 or len(token) > 128:
         raise HTTPException(404)
-    return render_page(ctx, "join.html")
+    return render_page(ctx, "invitation.html")
 
 
 @router.get("/api/invitations/{token}")
@@ -69,7 +69,7 @@ async def interview_page(ctx: Ctx, request: Request, db: Db) -> Response:
     assignment = await candidate_session(db, request)
     if assignment.status != "assigned" or not assignment.self_reported_name:
         return RedirectResponse("/candidate/welcome", status_code=303)
-    return render_page(ctx, "index.html")
+    return render_page(ctx, "interview_room.html")
 
 
 @router.get("/api/candidate/interview")

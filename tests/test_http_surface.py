@@ -66,10 +66,11 @@ def routes_of(app) -> list[tuple[str, str]]:
 
 
 def concrete(path: str) -> str:
+    """Fill path parameters with throwaway values."""
     out = path
     for name in ("record_id", "assignment_id", "version_id"):
         out = out.replace("{" + name + "}", str(uuid.uuid4()))
-    return out.replace("{token}", "t" * 40).replace("{name}", "app.js")
+    return out.replace("{token}", "t" * 40).replace("{name}", "styles/theme.css")
 
 
 def admin_routes(app) -> list[tuple[str, str]]:
@@ -136,6 +137,9 @@ def test_public_paths_are_the_only_unauthenticated_pages_and_endpoints(tmp_path)
         assert client.get("/healthz").json()["status"] == "ready"
         assert client.get("/login").status_code == 200
         assert client.get("/", follow_redirects=False).status_code == 303
-        assert client.get("/assets/app.js").status_code == 200
-        assert client.get("/assets/not-listed.js").status_code == 404
+        assert client.get("/assets/scripts/candidate/interview_room.js").status_code == 200
+        assert client.get("/assets/styles/theme.css").status_code == 200
+        # Only the allowlisted files are served: old flat names, unlisted files and traversal.
+        for name in ("app.js", "not-listed.js", "pages/sign_in.html", "../../config.py"):
+            assert client.get(f"/assets/{name}").status_code == 404, name
         assert client.post("/api/auth/signup").status_code == 410

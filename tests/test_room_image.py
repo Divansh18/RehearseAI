@@ -65,7 +65,9 @@ def live(monkeypatch):
         return {"sdp": "synthetic-answer", "type": "answer"}
 
     monkeypatch.setattr("rehearse_ai.server.routes.attempts.LiveSession", FakeLive)
-    monkeypatch.setattr("rehearse_ai.server.app.SmallWebRTCRequestHandler.handle_web_request", accept)
+    monkeypatch.setattr(
+        "rehearse_ai.server.app.SmallWebRTCRequestHandler.handle_web_request", accept
+    )
     return captured
 
 

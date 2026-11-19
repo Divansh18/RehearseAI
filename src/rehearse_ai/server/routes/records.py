@@ -27,7 +27,7 @@ async def records_page(ctx: Ctx, request: Request, db: Db) -> Response:
         return sign_in_redirect(ctx, request)
     if not user.is_superuser:
         raise HTTPException(403, "Administrator access required")
-    return render_page(ctx, "admin.html")
+    return render_page(ctx, "records.html")
 
 
 @router.get("/admin/interviews/{record_id}")
@@ -38,7 +38,7 @@ async def record_page(record_id: uuid.UUID, ctx: Ctx, request: Request, db: Db) 
     if not user.is_superuser:
         raise HTTPException(403, "Administrator access required")
     await queries.accessible_record(db, record_id, user, admin=True)
-    return render_page(ctx, "admin_interview_record.html")
+    return render_page(ctx, "record_detail.html")
 
 
 @router.get("/api/admin/interviews")
