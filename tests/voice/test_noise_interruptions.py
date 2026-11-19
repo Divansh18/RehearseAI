@@ -502,7 +502,7 @@ def test_settings_default_to_a_half_second_window_and_validate_bounds(tmp_path):
 
 
 def test_the_live_pipeline_uses_the_confirming_strategy_not_the_stock_vad_strategy():
-    source = (Path(__file__).parents[1] / "src/rehearse_ai/voice/pipeline.py").read_text()
+    source = (Path(__file__).parents[2] / "src/rehearse_ai/voice/pipeline.py").read_text()
     assert "ConfirmedSpeechStartStrategy(" in source
     assert "VADUserTurnStartStrategy" not in source
     assert issubclass(ConfirmedSpeechStartStrategy, BaseUserTurnStartStrategy)

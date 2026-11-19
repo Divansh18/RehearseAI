@@ -51,3 +51,5 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Shared synthetic-data helpers live in tests/support.py and are imported as `support`.
+pythonpath = ["tests"]
