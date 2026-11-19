@@ -11,9 +11,9 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 
 from rehearse_ai.config import AuthConfig, ConfigurationError, Settings
-from rehearse_ai.interview import Stage
-from rehearse_ai.pipeline import InterviewInput, LiveSession
+from rehearse_ai.interview.controller import Stage
 from rehearse_ai.server import create_app
+from rehearse_ai.voice.pipeline import InterviewInput, LiveSession
 
 AUTH_ENV = {
     "DATABASE_URL": "postgresql+asyncpg://rehearse:local@127.0.0.1:5433/rehearse_test",

@@ -26,7 +26,7 @@ from typing import Protocol
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.accounts_db import InterviewJob
+from rehearse_ai.models import InterviewJob
 
 LOGGER = logging.getLogger(__name__)
 ERROR_MAX = 64

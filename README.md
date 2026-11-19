@@ -18,11 +18,11 @@ Fill `.env` without committing it: `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `CARTES
 
 ```sh
 uv run alembic upgrade head          # applies 0001-0007 in order; run it again after pulling new migrations
-uv run python -m rehearse_ai.admin --create admin@example.com
+uv run python -m rehearse_ai.accounts.cli --create admin@example.com
 uv run python -m rehearse_ai
 ```
 
-The admin command asks for a password; there is no default admin. For a preserved active account, `uv run python -m rehearse_ai.admin admin@example.com` promotes it. Open [http://127.0.0.1:7860/](http://127.0.0.1:7860/) and sign in. [Mailpit](http://127.0.0.1:8025/) captures all local invitation and password-reset email; nothing is delivered externally. Production requires HTTPS, secure cookies, a production database and real SMTP credentials. **Production email delivery and deployment are unverified.**
+The admin command asks for a password; there is no default admin. For a preserved active account, `uv run python -m rehearse_ai.accounts.cli admin@example.com` promotes it. Open [http://127.0.0.1:7860/](http://127.0.0.1:7860/) and sign in. [Mailpit](http://127.0.0.1:8025/) captures all local invitation and password-reset email; nothing is delivered externally. Production requires HTTPS, secure cookies, a production database and real SMTP credentials. **Production email delivery and deployment are unverified.**
 
 ## How it works
 

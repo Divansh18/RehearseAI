@@ -10,10 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from rehearse_ai.accounts import digest, utcnow
-from rehearse_ai.accounts_db import ActionToken, SessionToken
-from rehearse_ai.admin import create_admin
+from rehearse_ai.accounts.cli import create_admin
+from rehearse_ai.accounts.service import digest, utcnow
 from rehearse_ai.config import AuthConfig, Settings
+from rehearse_ai.models import ActionToken, SessionToken
 from rehearse_ai.server import create_app
 
 TEST_URL = os.environ.get(

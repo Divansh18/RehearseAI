@@ -13,15 +13,15 @@ from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.accounts_db import (
+from rehearse_ai.invitations.access import BlueprintContent
+from rehearse_ai.models import (
     BlueprintVersion,
     Candidate,
     InterviewAssignment,
     InterviewRecord,
     TranscriptEntry,
 )
-from rehearse_ai.assigned import BlueprintContent
-from rehearse_ai.transcript_pdf import build_pdf
+from rehearse_ai.records.conversation_pdf import build_pdf
 
 LOGGER = logging.getLogger(__name__)
 TERMINAL = {"completed", "ended_early", "interrupted", "failed"}

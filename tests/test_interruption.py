@@ -48,8 +48,8 @@ from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from rehearse_ai.config import Settings
-from rehearse_ai.interruption import ConfirmedSpeechStartStrategy
-from rehearse_ai.pipeline import InterviewInput
+from rehearse_ai.voice.interruption import ConfirmedSpeechStartStrategy
+from rehearse_ai.voice.pipeline import InterviewInput
 
 AUDIO = Path(__file__).parent / "audio"
 RATE = 16000
@@ -502,7 +502,7 @@ def test_settings_default_to_a_half_second_window_and_validate_bounds(tmp_path):
 
 
 def test_the_live_pipeline_uses_the_confirming_strategy_not_the_stock_vad_strategy():
-    source = (Path(__file__).parents[1] / "src/rehearse_ai/pipeline.py").read_text()
+    source = (Path(__file__).parents[1] / "src/rehearse_ai/voice/pipeline.py").read_text()
     assert "ConfirmedSpeechStartStrategy(" in source
     assert "VADUserTurnStartStrategy" not in source
     assert issubclass(ConfirmedSpeechStartStrategy, BaseUserTurnStartStrategy)

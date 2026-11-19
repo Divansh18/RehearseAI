@@ -4,7 +4,7 @@ import wave
 import pytest
 
 from rehearse_ai.config import ConfigurationError, parse_stt_keyterms
-from rehearse_ai.stt_evaluation import compare, contains_phrase, load_clips, word_errors
+from rehearse_ai.voice.stt_evaluation import compare, contains_phrase, load_clips, word_errors
 
 
 def test_keyterms_are_bounded_and_can_be_disabled():

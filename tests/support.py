@@ -9,16 +9,16 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from rehearse_ai.accounts_db import (
+from rehearse_ai.accounts.cli import create_admin
+from rehearse_ai.config import AuthConfig, Settings
+from rehearse_ai.invitations.access import invitation_token, token_digest
+from rehearse_ai.models import (
     BlueprintVersion,
     Candidate,
     InterviewAssignment,
     InterviewBlueprint,
 )
-from rehearse_ai.admin import create_admin
-from rehearse_ai.assigned import invitation_token, token_digest
-from rehearse_ai.config import AuthConfig, Settings
-from rehearse_ai.preparation import PlanProviderError
+from rehearse_ai.plans.preparation import PlanProviderError
 from rehearse_ai.server import create_app
 
 TEST_URL = os.environ.get(

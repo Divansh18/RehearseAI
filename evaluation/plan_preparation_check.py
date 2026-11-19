@@ -20,8 +20,7 @@ import time
 from pathlib import Path
 
 from rehearse_ai.config import Settings
-from rehearse_ai.documents import extract_document
-from rehearse_ai.preparation import (
+from rehearse_ai.plans.preparation import (
     OpenAIPlanGenerator,
     PlanInputs,
     _squash,
@@ -29,6 +28,7 @@ from rehearse_ai.preparation import (
     generate_plan,
     question_range,
 )
+from rehearse_ai.scheduling.documents import extract_document
 
 DOCS = Path(__file__).parent / "plan_docs"
 SCENARIOS = [

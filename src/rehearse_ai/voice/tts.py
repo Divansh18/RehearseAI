@@ -19,8 +19,8 @@ from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.services.tts_service import TTSService
 
 from rehearse_ai.config import Settings
+from rehearse_ai.interview.session import InterviewSession
 from rehearse_ai.prompts import load_prompt
-from rehearse_ai.session import InterviewSession
 
 # A real OpenAI request first yielded audio after 9.7 seconds. This override applies
 # only to the OpenAI service; Cartesia uses Pipecat's own 3-second idle boundary.

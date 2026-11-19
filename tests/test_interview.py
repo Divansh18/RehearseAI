@@ -1,6 +1,6 @@
 import pytest
 
-from rehearse_ai.interview import (
+from rehearse_ai.interview.controller import (
     QUESTIONS,
     InterviewController,
     InvalidTransition,

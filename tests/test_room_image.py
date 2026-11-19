@@ -15,9 +15,9 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from support import TEST_URL, login, make_app, new_admin_email, seed_assignment
 
-from rehearse_ai.accounts_db import InterviewRecord
-from rehearse_ai.session_log import SessionLog
-from rehearse_ai.snapshot import InvalidSnapshot, save_snapshot
+from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.models import InterviewRecord
+from rehearse_ai.records.images import InvalidSnapshot, save_snapshot
 
 OFFER = {"sdp": "synthetic-offer", "type": "offer", "snapshot_acknowledged": True}
 
@@ -449,7 +449,7 @@ def test_new_transcript_rows_record_utterance_kind_and_question_number(tmp_path,
 
 
 async def _transcript(store, record_id):
-    from rehearse_ai.accounts_db import TranscriptEntry
+    from rehearse_ai.models import TranscriptEntry
 
     async with store.db_sessions() as db:
         return list(

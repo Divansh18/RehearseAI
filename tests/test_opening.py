@@ -9,7 +9,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
-from rehearse_ai.interview import (
+from rehearse_ai.interview.controller import (
     GREETING,
     QUESTIONS,
     READINESS_CLARIFICATION,
@@ -22,10 +22,10 @@ from rehearse_ai.interview import (
     Stage,
     UtteranceKind,
 )
-from rehearse_ai.pipeline import InterviewInput, inference_adapter
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
 from rehearse_ai.prompts import load_prompt
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.voice.pipeline import InterviewInput, inference_adapter
 
 
 def output_started(session):

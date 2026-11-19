@@ -7,8 +7,8 @@ import zipfile
 import pytest
 from support import JOB_TEXT, RESUME_TEXT, make_docx, make_pdf
 
-from rehearse_ai import documents
-from rehearse_ai.documents import (
+from rehearse_ai.scheduling import documents
+from rehearse_ai.scheduling.documents import (
     DocumentError,
     detect_kind,
     extract_document,

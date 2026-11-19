@@ -12,12 +12,12 @@ from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from rehearse_ai.accounts_db import Candidate, InterviewRecord, TranscriptEntry
-from rehearse_ai.admin import promote
-from rehearse_ai.interview_store import InterviewStore
-from rehearse_ai.session_log import SessionLog
-from rehearse_ai.snapshot import InvalidSnapshot, save_snapshot
-from rehearse_ai.transcript_pdf import build_pdf
+from rehearse_ai.accounts.cli import promote
+from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.models import Candidate, InterviewRecord, TranscriptEntry
+from rehearse_ai.records.conversation_pdf import build_pdf
+from rehearse_ai.records.images import InvalidSnapshot, save_snapshot
+from rehearse_ai.records.store import InterviewStore
 
 TEST_URL = os.environ.get(
     "REHEARSE_TEST_DATABASE_URL",
@@ -195,7 +195,7 @@ async def test_restart_replays_raw_events_and_failure_is_visible(tmp_path, monke
         def fail(*_args):
             raise OSError("synthetic PDF error")
 
-        monkeypatch.setattr("rehearse_ai.interview_store.build_pdf", fail)
+        monkeypatch.setattr("rehearse_ai.records.store.build_pdf", fail)
         assert not await store.generate_pdf(record_id)
         async with sessions() as db:
             interview = await db.get(InterviewRecord, record_id)

@@ -22,14 +22,14 @@ from support import (
     seed_assignment,
 )
 
-from rehearse_ai.accounts_db import (
+from rehearse_ai.interview.browser_events import candidate_event
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.models import (
     CandidateInterviewSession,
     InterviewAssignment,
     InterviewRecord,
 )
-from rehearse_ai.browser_events import candidate_event
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
 
 PRIVATE_MARKERS = (SECRET_GUIDANCE, SECRET_BASIS, SECRET_EVIDENCE)
 
@@ -463,6 +463,6 @@ def test_resend_is_refused_once_the_interview_has_started_or_ended(tmp_path, sta
             )
         )
 
-    from rehearse_ai.assigned import token_digest
+    from rehearse_ai.invitations.access import token_digest
 
     assert run(digest_unchanged) == token_digest(token)

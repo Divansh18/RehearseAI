@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 from pypdf import PdfReader
 
-from rehearse_ai.transcript_pdf import (
+from rehearse_ai.records.conversation_pdf import (
     build_pdf,
     completion_status,
     fit_image,

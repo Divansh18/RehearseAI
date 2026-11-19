@@ -33,7 +33,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-rehearse_ai = ["prompts/*.txt", "web/*.html", "web/*.css", "web/*.js", "fonts/*.ttf", "fonts/OFL.txt"]
+rehearse_ai = ["prompts/*.txt", "web/*.html", "web/*.css", "web/*.js", "records/fonts/*.ttf", "records/fonts/OFL.txt"]
 
 [tool.ruff]
 line-length = 100

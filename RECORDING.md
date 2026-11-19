@@ -5,7 +5,7 @@ A [Loom recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7) 
 The export was generated from the confirmed raw log with the existing exporter. To reproduce it, use a **fresh** output folder; the exporter refuses to overwrite a nonempty folder:
 
 ```sh
-uv run python -m rehearse_ai.export_session --session sessions/d564949d-6780-414f-8192-22bae9e9345d.jsonl --output recordings/d564949d-6780-414f-8192-22bae9e9345d-recheck
+uv run python -m rehearse_ai.records.session_export --session sessions/d564949d-6780-414f-8192-22bae9e9345d.jsonl --output recordings/d564949d-6780-414f-8192-22bae9e9345d-recheck
 ```
 
 The raw local log is `sessions/d564949d-6780-414f-8192-22bae9e9345d.jsonl` and was not rewritten. The tracked evidence files match the original local export byte for byte. They preserve STT wording, including recognition errors. The video itself remains on Loom; no recording file is in the repository.

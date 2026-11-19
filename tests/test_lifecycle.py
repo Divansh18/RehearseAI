@@ -16,11 +16,11 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import TransportParams
 
-from rehearse_ai.interview import QUESTIONS, Stage
-from rehearse_ai.pipeline import AudioObserver, InterviewInput, UtteranceMarkerFrame
+from rehearse_ai.interview.controller import QUESTIONS, Stage
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
 from rehearse_ai.prompts import load_prompt
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.voice.pipeline import AudioObserver, InterviewInput, UtteranceMarkerFrame
 
 
 async def settle():

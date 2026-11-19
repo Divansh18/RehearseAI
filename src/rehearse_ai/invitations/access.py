@@ -12,7 +12,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rehearse_ai.accounts_db import CandidateInterviewSession, InterviewAssignment
+from rehearse_ai.models import CandidateInterviewSession, InterviewAssignment
 
 SESSION_COOKIE = "rehearse_invitee"
 

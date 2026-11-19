@@ -20,23 +20,23 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from rehearse_ai.accounts import MailDeliveryError, Mailer
-from rehearse_ai.accounts_db import (
+from rehearse_ai.accounts.service import MailDeliveryError, Mailer
+from rehearse_ai.invitations.access import BlueprintContent, invitation_token, now, token_digest
+from rehearse_ai.jobs import ClaimedJob, JobCancelled, JobError, enqueue, verify_claim
+from rehearse_ai.models import (
     AssignmentAudit,
     BlueprintVersion,
     CandidateInterviewSession,
     InterviewAssignment,
     InterviewPreparation,
 )
-from rehearse_ai.assigned import BlueprintContent, invitation_token, now, token_digest
-from rehearse_ai.documents import (
+from rehearse_ai.scheduling.documents import (
     DocumentError,
     detect_kind,
     extract_document,
     store_document,
     validate_text,
 )
-from rehearse_ai.jobs import ClaimedJob, JobCancelled, JobError, enqueue, verify_claim
 
 MAX_INSTRUCTIONS = 2000
 MAX_FUTURE_DAYS = 366

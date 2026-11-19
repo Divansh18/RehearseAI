@@ -10,9 +10,9 @@ from fastapi_users import exceptions
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from rehearse_ai.accounts import AccountService, CandidateCreate
-from rehearse_ai.accounts_db import Candidate
+from rehearse_ai.accounts.service import AccountService, CandidateCreate
 from rehearse_ai.config import AuthConfig
+from rehearse_ai.models import Candidate
 
 
 async def promote(email: str, database_url: str) -> str:

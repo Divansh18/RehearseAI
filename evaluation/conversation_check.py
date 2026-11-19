@@ -20,8 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from openai import AsyncOpenAI
 
 from rehearse_ai.config import Settings
-from rehearse_ai.pipeline import ASSIGNED_DECISION_SCHEMA, OPENING_SCHEMA
 from rehearse_ai.prompts import load_prompt
+from rehearse_ai.voice.pipeline import ASSIGNED_DECISION_SCHEMA, OPENING_SCHEMA
 
 REPLIES = [
     "I'm good, thanks.",
@@ -82,8 +82,8 @@ async def decisions(client, model):
 
     from support import plan_dict
 
-    from rehearse_ai.session import InterviewSession
-    from rehearse_ai.session_log import SessionLog
+    from rehearse_ai.interview.session import InterviewSession
+    from rehearse_ai.interview.session_log import SessionLog
 
     spoken = []
 

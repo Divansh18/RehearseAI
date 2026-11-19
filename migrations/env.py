@@ -9,7 +9,7 @@ from dotenv import dotenv_values
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from rehearse_ai.accounts_db import Base
+from rehearse_ai.models import Base
 
 config = context.config
 if config.config_file_name:

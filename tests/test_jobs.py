@@ -20,8 +20,9 @@ from support import (
     new_admin_email,
 )
 
-from rehearse_ai.accounts import MailDeliveryError
-from rehearse_ai.accounts_db import (
+from rehearse_ai.accounts.service import MailDeliveryError
+from rehearse_ai.jobs import JobRunner
+from rehearse_ai.models import (
     BlueprintVersion,
     Candidate,
     InterviewAssignment,
@@ -29,14 +30,13 @@ from rehearse_ai.accounts_db import (
     InterviewPreparation,
     InterviewRecord,
 )
-from rehearse_ai.jobs import JobRunner
-from rehearse_ai.preparation import (
+from rehearse_ai.plans.preparation import (
     PlanProviderError,
     PlanQualityError,
     question_range,
     validate_generated_plan,
 )
-from rehearse_ai.scheduling import Upload, parse_fields, schedule_interview
+from rehearse_ai.scheduling.service import Upload, parse_fields, schedule_interview
 
 
 @pytest.fixture(scope="module")
@@ -322,7 +322,7 @@ async def test_invitation_failures_retry_then_recover_and_are_not_duplicated(env
     assert len(sent) == 1
     # A re-run of a finished delivery must not send (and rotate the link) a second time.
     from rehearse_ai.jobs import ClaimedJob
-    from rehearse_ai.scheduling import InviteHandler
+    from rehearse_ai.scheduling.service import InviteHandler
 
     handler = InviteHandler(env.db, lambda: env.app.state.accounts.mailer)
     async with env.db.begin() as db:

@@ -17,9 +17,9 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from support import plan_dict
 
-from rehearse_ai.pipeline import InterviewInput
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.voice.pipeline import InterviewInput
 
 DOWN = FrameDirection.DOWNSTREAM
 
@@ -210,7 +210,7 @@ def test_details_are_read_from_the_real_deepgram_result_type():
         ListenV1ResultsChannelAlternativesItem,
     )
 
-    from rehearse_ai.pipeline import stt_details
+    from rehearse_ai.voice.pipeline import stt_details
 
     result = ListenV1Results(
         type="Results",

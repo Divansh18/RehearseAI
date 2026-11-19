@@ -182,7 +182,7 @@ async def extract_document(
         sys.executable,
         "-I",
         "-m",
-        "rehearse_ai.documents",
+        "rehearse_ai.scheduling.documents",
         str(path),
         kind,
         role,

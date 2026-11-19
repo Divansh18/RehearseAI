@@ -7,25 +7,15 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from rehearse_ai.browser_events import candidate_event
-from rehearse_ai.budget import (
+from rehearse_ai.interview.browser_events import candidate_event
+from rehearse_ai.interview.budget import (
     ActiveClock,
     RemainingQuestion,
     pressure,
     question_seconds,
     skip_for_time,
 )
-from rehearse_ai.controls import (
-    END_CLAUSE as _END_CLAUSE,
-)
-from rehearse_ai.controls import (
-    WITHDRAW_CLAUSE as _WITHDRAW_CLAUSE,
-)
-from rehearse_ai.controls import (
-    Intent,
-    interpret,
-)
-from rehearse_ai.interview import (
+from rehearse_ai.interview.controller import (
     QUESTIONS,
     InterviewController,
     InvalidTransition,
@@ -36,8 +26,18 @@ from rehearse_ai.interview import (
     Utterance,
     UtteranceKind,
 )
-from rehearse_ai.memory import FACT_FIELDS, FactField
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.interview.controls import (
+    END_CLAUSE as _END_CLAUSE,
+)
+from rehearse_ai.interview.controls import (
+    WITHDRAW_CLAUSE as _WITHDRAW_CLAUSE,
+)
+from rehearse_ai.interview.controls import (
+    Intent,
+    interpret,
+)
+from rehearse_ai.interview.memory import FACT_FIELDS, FactField
+from rehearse_ai.interview.session_log import SessionLog
 
 # The opening is one exchange: greeting, the candidate's reply, a short acknowledgement and a
 # transition. If the candidate says nothing it moves on after this wait. The whole opening is

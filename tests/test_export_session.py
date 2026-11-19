@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from rehearse_ai.export_session import build_export, export_session, load_events
+from rehearse_ai.records.session_export import build_export, export_session, load_events
 
 
 def event(sequence: int, time_ms: float, name: str, **details: object) -> dict[str, object]:

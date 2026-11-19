@@ -9,10 +9,10 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
-from rehearse_ai.interview import GREETING, QUESTIONS, Stage, UtteranceKind
-from rehearse_ai.pipeline import InterviewInput
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.interview.controller import GREETING, QUESTIONS, Stage, UtteranceKind
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.voice.pipeline import InterviewInput
 
 
 def make_session(tmp_path, infer=None):

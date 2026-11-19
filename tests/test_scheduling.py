@@ -22,12 +22,12 @@ from support import (
     new_admin_email,
 )
 
-from rehearse_ai.accounts_db import (
+from rehearse_ai.models import (
     InterviewAssignment,
     InterviewJob,
     InterviewPreparation,
 )
-from rehearse_ai.scheduling import ScheduleRejected, resolve_window
+from rehearse_ai.scheduling.service import ScheduleRejected, resolve_window
 
 PRIVATE_INSTRUCTIONS = "PRIVATE-INSTRUCTION-TEXT emphasise reliability and mentoring"
 
@@ -160,7 +160,7 @@ def test_schedule_saves_interview_and_queues_preparation_and_invitation(tmp_path
 
 
 def test_invitation_is_delivered_even_when_preparation_keeps_failing(tmp_path, admin_email):
-    from rehearse_ai.preparation import PlanProviderError
+    from rehearse_ai.plans.preparation import PlanProviderError
 
     app = make_app(tmp_path, FakeGenerator(PlanProviderError("RateLimitError")))
     with TestClient(app, client=(f"test-{uuid.uuid4().hex}", 50101)) as admin:

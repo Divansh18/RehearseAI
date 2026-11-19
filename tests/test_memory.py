@@ -5,9 +5,9 @@ import json
 
 import pytest
 
-from rehearse_ai.interview import Stage, UtteranceKind
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.interview.controller import Stage, UtteranceKind
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
 
 
 def deliver(session):

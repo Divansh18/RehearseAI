@@ -23,8 +23,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.accounts_db import ActionToken, Candidate, RateBucket, SessionToken
 from rehearse_ai.config import AuthConfig
+from rehearse_ai.models import ActionToken, Candidate, RateBucket, SessionToken
 
 
 def utcnow() -> datetime:

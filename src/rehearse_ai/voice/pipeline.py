@@ -37,12 +37,12 @@ from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from rehearse_ai.config import Settings
-from rehearse_ai.interruption import ConfirmedSpeechStartStrategy
-from rehearse_ai.interview import Stage, Utterance
+from rehearse_ai.interview.controller import Stage, Utterance
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
 from rehearse_ai.prompts import load_prompt
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
-from rehearse_ai.tts import UtteranceMarkerFrame, build_tts_service
+from rehearse_ai.voice.interruption import ConfirmedSpeechStartStrategy
+from rehearse_ai.voice.tts import UtteranceMarkerFrame, build_tts_service
 
 DECISION_SCHEMA = {
     "type": "object",

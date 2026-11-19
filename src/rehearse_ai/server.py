@@ -25,8 +25,21 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from rehearse_ai.accounts import AccountService, MailDeliveryError
-from rehearse_ai.accounts_db import (
+from rehearse_ai.accounts.service import AccountService, MailDeliveryError
+from rehearse_ai.config import ConfigurationError, Settings
+from rehearse_ai.invitations.access import (
+    SESSION_COOKIE,
+    BlueprintContent,
+    assignment_public,
+    candidate_session,
+    invitation_assignment,
+    now,
+    session_expiry,
+    set_candidate_cookie,
+    token_digest,
+)
+from rehearse_ai.jobs import JobRunner, enqueue
+from rehearse_ai.models import (
     AssignmentAudit,
     BlueprintVersion,
     Candidate,
@@ -38,29 +51,16 @@ from rehearse_ai.accounts_db import (
     InterviewRecord,
     TranscriptEntry,
 )
-from rehearse_ai.assigned import (
-    SESSION_COOKIE,
-    BlueprintContent,
-    assignment_public,
-    candidate_session,
-    invitation_assignment,
-    now,
-    session_expiry,
-    set_candidate_cookie,
-    token_digest,
-)
-from rehearse_ai.config import ConfigurationError, Settings
-from rehearse_ai.documents import MAX_UPLOAD_BYTES as MAX_DOCUMENT_BYTES
-from rehearse_ai.interview_store import TERMINAL, InterviewStore
-from rehearse_ai.jobs import JobRunner, enqueue
-from rehearse_ai.pipeline import LiveSession
-from rehearse_ai.preparation import (
+from rehearse_ai.plans.preparation import (
     MAX_REVISION_REQUEST,
     OpenAIPlanGenerator,
     PrepareHandler,
     ReviseHandler,
 )
-from rehearse_ai.scheduling import (
+from rehearse_ai.records.images import KINDS, LIMITS, InvalidSnapshot, save_snapshot
+from rehearse_ai.records.store import TERMINAL, InterviewStore
+from rehearse_ai.scheduling.documents import MAX_UPLOAD_BYTES as MAX_DOCUMENT_BYTES
+from rehearse_ai.scheduling.service import (
     IdempotencyConflict,
     InvitationUnavailable,
     InviteHandler,
@@ -70,7 +70,7 @@ from rehearse_ai.scheduling import (
     schedule_interview,
     send_invitation,
 )
-from rehearse_ai.snapshot import KINDS, LIMITS, InvalidSnapshot, save_snapshot
+from rehearse_ai.voice.pipeline import LiveSession
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 PACKAGE_DIR = WEB_DIR.parent

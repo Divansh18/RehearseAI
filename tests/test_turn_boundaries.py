@@ -9,11 +9,11 @@ from pipecat.frames.frames import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 
-from rehearse_ai.export_session import build_export
-from rehearse_ai.interview import QUESTIONS, Stage, UtteranceKind
-from rehearse_ai.pipeline import InterviewInput
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.interview.controller import QUESTIONS, Stage, UtteranceKind
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.records.session_export import build_export
+from rehearse_ai.voice.pipeline import InterviewInput
 
 
 def deliver(session):

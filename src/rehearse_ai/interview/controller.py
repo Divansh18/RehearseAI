@@ -3,7 +3,7 @@
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 
-from rehearse_ai.memory import SessionMemory
+from rehearse_ai.interview.memory import SessionMemory
 
 QUESTIONS = (
     "Tell me about a project you're proud of.",

@@ -7,9 +7,9 @@ import pytest
 from pipecat.processors.frame_processor import FrameDirection
 from websockets.protocol import State
 
-from rehearse_ai.session import InterviewSession
-from rehearse_ai.session_log import SessionLog
-from rehearse_ai.tts import ObservedCartesiaTTSService, UtteranceMarkerFrame
+from rehearse_ai.interview.session import InterviewSession
+from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.voice.tts import ObservedCartesiaTTSService, UtteranceMarkerFrame
 
 
 class RecordingSession:

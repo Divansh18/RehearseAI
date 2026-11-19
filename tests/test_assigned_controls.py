@@ -11,9 +11,9 @@ import json
 import pytest
 from support import plan_dict
 
-from rehearse_ai.controls import interpret
-from rehearse_ai.interview import Stage, UtteranceKind
-from rehearse_ai.session import (
+from rehearse_ai.interview.controller import Stage, UtteranceKind
+from rehearse_ai.interview.controls import interpret
+from rehearse_ai.interview.session import (
     FEEDBACK_DECLINED,
     FINISH_CLARIFICATION,
     OUTCOME_UNKNOWN,
@@ -21,7 +21,7 @@ from rehearse_ai.session import (
     RESTART_UNAVAILABLE,
     InterviewSession,
 )
-from rehearse_ai.session_log import SessionLog
+from rehearse_ai.interview.session_log import SessionLog
 
 Q = [item["question"] for item in plan_dict()["questions"]]
 
