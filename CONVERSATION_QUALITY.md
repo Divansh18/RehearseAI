@@ -1,5 +1,9 @@
 # Conversational quality: findings, changes and measurements
 
+> **Dated report.** The baseline, measurements and "remaining uncertainty" below describe real sessions
+> and checks made before the structural refactor and are kept as written; they are not re-measured
+> evidence for the current build. Code locations are updated to the current package layout.
+
 Written after a real candidate test of an assigned interview. Evidence: the newest assigned session's local event log (structure and timings only; no transcript content is reproduced here), the Pipecat/Deepgram source in the lockfile's versions, and synthetic and bounded real-model checks. **Nothing here is a microphone or acoustic verification.** Use [MANUAL_VOICE_TEST.md](MANUAL_VOICE_TEST.md) for that.
 
 ## What the real session showed (baseline)
@@ -89,4 +93,4 @@ A real Conversation PDF and its local event log (structure and timings only revi
 
 **Diagnostics.** The session log records `interruption_tentative`, `interruption_tentative_ended`, `interruption_committed` (with `source`, `waited_ms`, word count) and `interruption_rejected` (with `reason`, `tentative_ms`). They carry timings and counts only: no audio and no transcript text. None of them reach the browser.
 
-**Evidence.** `tests/test_interruption.py` drives labelled synthetic audio (macOS `say` speech, see `tests/audio/README.md`) through the real Silero VAD, `UserTurnProcessor` and `InterviewInput` in real time. STT is injected at labelled times because there is no real STT in a test. Synthetic claps, thumps and hiss never trigger Silero at all, so the noise stand-in is a truncated speech fragment. This shows the logic works; it does **not** measure robustness in any real home. There is no real-microphone "after" measurement yet; use the home-noise test in `MANUAL_VOICE_TEST.md`.
+**Evidence.** `tests/voice/test_noise_interruptions.py` drives labelled synthetic audio (macOS `say` speech, see `tests/voice/audio/README.md`) through the real Silero VAD, `UserTurnProcessor` and `InterviewInput` in real time. STT is injected at labelled times because there is no real STT in a test. Synthetic claps, thumps and hiss never trigger Silero at all, so the noise stand-in is a truncated speech fragment. This shows the logic works; it does **not** measure robustness in any real home. There is no real-microphone "after" measurement yet; use the home-noise test in `MANUAL_VOICE_TEST.md`.

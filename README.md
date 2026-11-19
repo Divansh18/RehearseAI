@@ -88,7 +88,7 @@ There is a single organisation. **Every administrator can see and act on every i
 ```sh
 export REHEARSE_TEST_DATABASE_URL=postgresql+asyncpg://rehearse:rehearse_local_only@127.0.0.1:5433/rehearse_test
 uv run alembic upgrade head          # with DATABASE_URL pointing at the _test database
-uv run pytest -q
+uv run pytest -q                     # run serially: tests share one database
 node --test tests/frontend/browser_ui.test.mjs
 uv run ruff check . && uv run ruff format --check .
 uv lock --check && uv build
@@ -109,9 +109,28 @@ PostgreSQL tests need `REHEARSE_TEST_DATABASE_URL` ending in `_test` (Compose cr
 
 Real devices and provider keys are required for step 6. Screen capture may be unavailable on mobile.
 
-## Historical material
+## Documentation map
 
-The earlier take-home [recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [recorded evidence](evidence/recorded-session/) and [submission checklist](SUBMISSION_CHECKLIST.md) describe the **historical prototype** and are not verification of the current product. Historical practice code and prompts remain only for regression compatibility and cannot be reached through the invitation entry, which requires an assigned plan. See [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md), [PRODUCT_CLEANUP.md](PRODUCT_CLEANUP.md) and [PROMPTS.md](PROMPTS.md).
+**Current** (kept in step with the code):
+
+| Document | Covers |
+| --- | --- |
+| [ARCHITECTURE.md](ARCHITECTURE.md), [CONTRIBUTING.md](CONTRIBUTING.md) | Code layout, dependency direction, state ownership, how to work on it and verify |
+| [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md), [PLAN.md](PLAN.md), [PRODUCT_CLEANUP.md](PRODUCT_CLEANUP.md) | Product behaviour, current state and known limits, what was retired |
+| [PROMPTS.md](PROMPTS.md) | The live prompts and what the model is given |
+| [migrations/MODELS_AND_MIGRATIONS.md](migrations/MODELS_AND_MIGRATIONS.md) | How the ORM models and the migrations are kept in agreement |
+| [MANUAL_VOICE_TEST.md](MANUAL_VOICE_TEST.md) | The real-microphone and real-device checklists (not yet run against the current build) |
+
+**Dated reports and measurements** (accurate for the build and date they describe; module names inside
+them are updated, their numbers are not): [CONVERSATION_QUALITY.md](CONVERSATION_QUALITY.md),
+[STT_EVALUATION.md](STT_EVALUATION.md), [PLAN_PREPARATION_CHECKS.md](PLAN_PREPARATION_CHECKS.md),
+[TTS_COMPARISON.md](TTS_COMPARISON.md), [TTS_DIAGNOSIS.md](TTS_DIAGNOSIS.md).
+
+**Historical prototype** (the earlier take-home; not verification of the current product): the
+[recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [RECORDING.md](RECORDING.md),
+[recorded evidence](evidence/recorded-session/) and [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md).
+The practice interview and its prompts it describes were removed from the code and remain only in Git
+history; the invitation entry requires an assigned plan.
 
 ## Conversation PDF and interview-room image
 

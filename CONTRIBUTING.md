@@ -71,7 +71,8 @@ the Python name and keep the stored name explicit, as `models.py` does for `plan
 * Transactions that change an assignment or attempt lock the row first (`with_for_update`) and check
   its status in the same transaction.
 * Add a table or column only with an additive Alembic migration; never edit a shipped migration and
-  never write a destructive one.
+  never write a destructive one. Then update `models.py` to match: `tests/test_schema_drift.py` fails
+  if the models and migrations disagree (see `migrations/MODELS_AND_MIGRATIONS.md`).
 
 ## Commits
 

@@ -1,5 +1,7 @@
 # Recorded session evidence
 
+> **Historical prototype evidence.** This describes the earlier take-home recording (a fixed-question practice interview), not the current assigned-interview product. It is preserved as it was recorded.
+
 A [Loom recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7) has been supplied, and the author confirmed its matching local session ID below. The [transcript](evidence/recorded-session/transcript.txt), [latency.jsonl](evidence/recorded-session/latency.jsonl), and [latency summary](evidence/recorded-session/latency_summary.md) are tracked copies of that session's export. The raw log and other development sessions remain ignored. Direct TTS samples are not recording-session evidence.
 
 The export was generated from the confirmed raw log with the existing exporter. To reproduce it, use a **fresh** output folder; the exporter refuses to overwrite a nonempty folder:

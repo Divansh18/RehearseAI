@@ -1,6 +1,6 @@
 # Synthetic audio fixtures
 
-Used only by `tests/test_interruption.py`. None of these contain a human voice or any recording of a
+Used only by `tests/voice/test_noise_interruptions.py`. None of these contain a human voice or any recording of a
 person: every file is 16 kHz mono 16-bit speech generated with the macOS `say` command (default
 system voice).
 

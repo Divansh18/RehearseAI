@@ -1,5 +1,7 @@
 # Small direct TTS comparison — 2026-10-26
 
+> **Dated report.** Measurements and findings for the build and date named below; not re-measured for the current build.
+
 This is a six-request diagnostic, not an application or browser latency benchmark. The app default was subsequently switched to Cartesia at the user's request. Both keys were read from local `.env`; neither key is included in this document or the measurements file.
 
 ## Configuration and method

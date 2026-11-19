@@ -1,7 +1,7 @@
 # Models and migrations
 
 The migrations in `migrations/versions/` are authoritative: they define what exists in a real
-database, and the application never creates tables itself. `rehearse_ai/models.py` describes the
+database, and the application never creates tables itself. `src/rehearse_ai/models.py` describes the
 same schema so that queries are typed and Alembic can detect change.
 
 The two **agree exactly**. For the migrated schema (0001–0007), the models declare every index with

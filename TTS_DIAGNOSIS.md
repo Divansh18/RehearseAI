@@ -1,5 +1,7 @@
 # TTS context timeout investigation
 
+> **Dated report.** Measurements and findings for the build and date named below; not re-measured for the current build.
+
 This investigation concerns real session `3725ce4f-17fd-4262-9d38-bca06677f30b` on build `0.1.0+49e1ee1a8659`. It does not use or store API key values or audio recordings.
 
 ## Affected utterance
