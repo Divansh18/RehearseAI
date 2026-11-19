@@ -128,7 +128,7 @@ def test_schedule_saves_interview_and_queues_preparation_and_invitation(tmp_path
         assert generator.calls == [] and app.state.sent_mail == []
         assignment, prep, jobs = by_key(data["idempotency_key"])
         assert str(assignment.id) == body["assignment_id"]
-        assert assignment.blueprint_version_id is None
+        assert assignment.plan_version_id is None
         assert assignment.preparation_status == "pending" and assignment.mail_status == "pending"
         assert assignment.candidate_instructions == ""  # private instructions stay separate
         assert assignment.target_minutes == 30
@@ -149,7 +149,7 @@ def test_schedule_saves_interview_and_queues_preparation_and_invitation(tmp_path
             "prepare": "succeeded",
         }
         assert assignment.mail_status == "sent" and assignment.preparation_status == "ready"
-        assert prep.blueprint_id is not None and assignment.blueprint_version_id is not None
+        assert prep.plan_id is not None and assignment.plan_version_id is not None
         ((to, token, details),) = app.state.sent_mail
         assert to == data["candidate_email"].casefold()
         assert details["title"] == "Candidate interview" and details["target_minutes"] == 30

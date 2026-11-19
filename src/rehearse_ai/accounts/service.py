@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -24,18 +24,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rehearse_ai.config import AuthConfig
-from rehearse_ai.models import ActionToken, Candidate, RateBucket, SessionToken
-
-
-def utcnow() -> datetime:
-    return datetime.now(UTC)
+from rehearse_ai.models import Account, AccountSessionToken, ActionToken, RateBucket, utcnow
 
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-class CandidateCreate(schemas.BaseUserCreate):
+class AccountCreate(schemas.BaseUserCreate):
     pass
 
 
@@ -118,9 +114,9 @@ class Mailer:
             raise MailDeliveryError("Interview invitation delivery failed") from exc
 
 
-class CandidateManager(UUIDIDMixin, BaseUserManager[Candidate, uuid.UUID]):
+class AccountManager(UUIDIDMixin, BaseUserManager[Account, uuid.UUID]):
     def __init__(self, db: AsyncSession, mailer: Mailer, secret: str):
-        super().__init__(SQLAlchemyUserDatabase(db, Candidate))
+        super().__init__(SQLAlchemyUserDatabase(db, Account))
         self.db = db
         self.mailer = mailer
         self.verification_token_secret = secret
@@ -130,7 +126,7 @@ class CandidateManager(UUIDIDMixin, BaseUserManager[Candidate, uuid.UUID]):
         if len(password) < 12 or len(password) > 256:
             raise exceptions.InvalidPasswordException("Use a password of 12–256 characters")
 
-    async def request_verify(self, user: Candidate, request: Request | None = None) -> None:
+    async def request_verify(self, user: Account, request: Request | None = None) -> None:
         if not user.is_active:
             raise exceptions.UserInactive()
         if user.is_verified:
@@ -147,7 +143,7 @@ class CandidateManager(UUIDIDMixin, BaseUserManager[Candidate, uuid.UUID]):
         )
         await self.on_after_request_verify(user, token, request)
 
-    async def _send_action(self, user: Candidate, token: str, purpose: str) -> None:
+    async def _send_action(self, user: Account, token: str, purpose: str) -> None:
         if purpose == "verify":
             await self.db.execute(
                 update(ActionToken)
@@ -166,12 +162,12 @@ class CandidateManager(UUIDIDMixin, BaseUserManager[Candidate, uuid.UUID]):
         await self.mailer.send_link(user.email, purpose, token)
 
     async def on_after_request_verify(
-        self, user: Candidate, token: str, request: Request | None = None
+        self, user: Account, token: str, request: Request | None = None
     ) -> None:
         await self._send_action(user, token, "verify")
 
     async def on_after_forgot_password(
-        self, user: Candidate, token: str, request: Request | None = None
+        self, user: Account, token: str, request: Request | None = None
     ) -> None:
         await self._send_action(user, token, "reset")
 
@@ -217,21 +213,21 @@ class AccountService:
         except (BadSignature, SignatureExpired) as exc:
             raise HTTPException(403, "Refresh the page and try again") from exc
 
-    def manager(self, db: AsyncSession) -> CandidateManager:
-        return CandidateManager(db, self.mailer, self.config.secret)
+    def manager(self, db: AsyncSession) -> AccountManager:
+        return AccountManager(db, self.mailer, self.config.secret)
 
     def strategy(self, db: AsyncSession) -> DatabaseStrategy:
         return DatabaseStrategy(
-            SQLAlchemyAccessTokenDatabase(db, SessionToken),
+            SQLAlchemyAccessTokenDatabase(db, AccountSessionToken),
             lifetime_seconds=self.config.session_seconds,
         )
 
-    async def current_user(self, request: Request, db: AsyncSession) -> Candidate | None:
+    async def current_user(self, request: Request, db: AsyncSession) -> Account | None:
         token = request.cookies.get(self.cookies.cookie_name)
         user = await self.strategy(db).read_token(token, self.manager(db))
         return user if user and user.is_active else None
 
-    async def require_user(self, request: Request, db: AsyncSession) -> Candidate:
+    async def require_user(self, request: Request, db: AsyncSession) -> Account:
         user = await self.current_user(request, db)
         if not user:
             raise HTTPException(401, "Sign in to continue")
@@ -305,6 +301,6 @@ class AccountService:
             raise HTTPException(400, "This link is invalid or has expired") from exc
         except exceptions.InvalidPasswordException as exc:
             raise HTTPException(400, str(exc.reason)) from exc
-        await db.execute(delete(SessionToken).where(SessionToken.user_id == user.id))
+        await db.execute(delete(AccountSessionToken).where(AccountSessionToken.user_id == user.id))
         await db.commit()
         return user.id

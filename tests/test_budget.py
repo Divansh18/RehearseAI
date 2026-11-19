@@ -18,7 +18,7 @@ from rehearse_ai.interview.budget import (
 from rehearse_ai.interview.controller import Stage
 from rehearse_ai.interview.session import InterviewSession
 from rehearse_ai.interview.session_log import SessionLog
-from rehearse_ai.models import Candidate, InterviewRecord
+from rehearse_ai.models import Account, InterviewRecord
 from rehearse_ai.records.store import InterviewStore
 
 CLOSING = "That concludes the interview. Thank you for your time, Nyla."
@@ -350,7 +350,7 @@ async def test_coverage_is_persisted_and_historical_records_remain_readable(tmp_
     engine = create_async_engine(TEST_URL)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        candidate = Candidate(
+        candidate = Account(
             id=uuid.uuid4(),
             email=f"history-{uuid.uuid4().hex}@example.com",
             hashed_password="x",
@@ -395,7 +395,7 @@ async def test_coverage_is_persisted_and_historical_records_remain_readable(tmp_
         async with sessions() as db:
             old = await db.get(InterviewRecord, old_id)
             new = await db.get(InterviewRecord, new_id)
-            assert old.coverage_summary is None and old.blueprint_version_id is None
+            assert old.coverage_summary is None and old.plan_version_id is None
             assert old.pdf_status == "available" and new.pdf_status == "available"
             assert new.coverage_summary == summary
         assert store.pdf_path(old_id).is_file() and store.pdf_path(new_id).is_file()
@@ -404,6 +404,6 @@ async def test_coverage_is_persisted_and_historical_records_remain_readable(tmp_
         new_log.close()
         async with sessions() as db:
             assert (await db.get(InterviewRecord, new_id)).coverage_summary == summary
-            assert await db.scalar(select(Candidate.id).where(Candidate.id == candidate.id))
+            assert await db.scalar(select(Account.id).where(Account.id == candidate.id))
     finally:
         await engine.dispose()

@@ -13,10 +13,10 @@ from rehearse_ai.accounts.cli import create_admin
 from rehearse_ai.config import AuthConfig, Settings
 from rehearse_ai.invitations.access import invitation_token, token_digest
 from rehearse_ai.models import (
-    BlueprintVersion,
-    Candidate,
+    Account,
     InterviewAssignment,
-    InterviewBlueprint,
+    InterviewPlan,
+    InterviewPlanVersion,
 )
 from rehearse_ai.plans.preparation import PlanProviderError
 from rehearse_ai.server import create_app
@@ -221,10 +221,10 @@ async def seed_assignment(
     latest = latest or instant + timedelta(minutes=30)
     try:
         async with async_sessionmaker(engine).begin() as db:
-            admin_id = await db.scalar(select(Candidate.id).where(Candidate.email == admin_email))
+            admin_id = await db.scalar(select(Account.id).where(Account.email == admin_email))
             version_id = None
             if plan:
-                blueprint = InterviewBlueprint(
+                blueprint = InterviewPlan(
                     created_by=admin_id,
                     draft=content or plan_dict(),
                     created_at=instant,
@@ -232,8 +232,8 @@ async def seed_assignment(
                 )
                 db.add(blueprint)
                 await db.flush()
-                version = BlueprintVersion(
-                    blueprint_id=blueprint.id,
+                version = InterviewPlanVersion(
+                    plan_id=blueprint.id,
                     version=1,
                     content=content or plan_dict(),
                     published_at=instant,
@@ -242,7 +242,7 @@ async def seed_assignment(
                 await db.flush()
                 version_id = version.id
             assignment = InterviewAssignment(
-                blueprint_version_id=version_id,
+                plan_version_id=version_id,
                 candidate_email=candidate_email or f"invented-{uuid.uuid4().hex}@example.com",
                 candidate_name="Nyla Example",
                 adjustments={"focus_areas": ["Queues"]},

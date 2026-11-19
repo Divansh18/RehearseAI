@@ -26,7 +26,7 @@ from rehearse_ai.interview.browser_events import candidate_event
 from rehearse_ai.interview.session import InterviewSession
 from rehearse_ai.interview.session_log import SessionLog
 from rehearse_ai.models import (
-    CandidateInterviewSession,
+    CandidateSession,
     InterviewAssignment,
     InterviewRecord,
 )
@@ -423,10 +423,10 @@ def test_resend_rotates_token_and_revokes_older_candidate_sessions(tmp_path):
             async def live_sessions(db):
                 return await db.scalar(
                     select(func.count())
-                    .select_from(CandidateInterviewSession)
+                    .select_from(CandidateSession)
                     .where(
-                        CandidateInterviewSession.assignment_id == uuid.UUID(assignment_id),
-                        CandidateInterviewSession.revoked_at.is_(None),
+                        CandidateSession.assignment_id == uuid.UUID(assignment_id),
+                        CandidateSession.revoked_at.is_(None),
                     )
                 )
 

@@ -11,10 +11,10 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from rehearse_ai.plans.schema import QUESTION_SHARE
+
 # Fraction of the target after which optional probing stops.
 TIGHT_FRACTION = 0.8
-# Share of the target reserved for questions (the rest is greeting, transitions, closing).
-QUESTION_SHARE = 0.85
 
 
 class ActiveClock:

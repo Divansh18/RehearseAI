@@ -23,10 +23,10 @@ from rehearse_ai.interview.session import InterviewSession
 from rehearse_ai.interview.session_log import SessionLog
 from rehearse_ai.invitations.access import invitation_token, token_digest
 from rehearse_ai.models import (
-    BlueprintVersion,
-    Candidate,
+    Account,
     InterviewAssignment,
-    InterviewBlueprint,
+    InterviewPlan,
+    InterviewPlanVersion,
 )
 from rehearse_ai.server import create_app
 
@@ -71,10 +71,8 @@ async def existing_assignment(admin_email, *, version_id=None, candidate_email=N
     try:
         async with async_sessionmaker(engine).begin() as db:
             if version_id is None:
-                admin_id = await db.scalar(
-                    select(Candidate.id).where(Candidate.email == admin_email)
-                )
-                blueprint = InterviewBlueprint(
+                admin_id = await db.scalar(select(Account.id).where(Account.email == admin_email))
+                blueprint = InterviewPlan(
                     created_by=admin_id,
                     draft=PLAN.copy(),
                     created_at=instant,
@@ -82,8 +80,8 @@ async def existing_assignment(admin_email, *, version_id=None, candidate_email=N
                 )
                 db.add(blueprint)
                 await db.flush()
-                version = BlueprintVersion(
-                    blueprint_id=blueprint.id,
+                version = InterviewPlanVersion(
+                    plan_id=blueprint.id,
                     version=1,
                     content=PLAN.copy(),
                     published_at=instant,
@@ -92,7 +90,7 @@ async def existing_assignment(admin_email, *, version_id=None, candidate_email=N
                 await db.flush()
                 version_id = version.id
             assignment = InterviewAssignment(
-                blueprint_version_id=version_id,
+                plan_version_id=version_id,
                 candidate_email=candidate_email or f"invented-{uuid.uuid4().hex}@example.com",
                 candidate_name="Nyla Example",
                 adjustments={"focus_areas": ["Queues"]},
@@ -334,7 +332,7 @@ async def test_prior_answer_coverage_skips_redundant_authored_question(tmp_path)
     assert session.controller.answers[1] == ("I built the API and chose queues over a broker.",)
 
 
-def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, monkeypatch):
+def test_admin_plan_invitation_and_restricted_candidate_session(tmp_path, monkeypatch):
     captured = []
 
     class FakeLiveSession:
@@ -511,7 +509,7 @@ def test_admin_blueprint_invitation_and_restricted_candidate_session(tmp_path, m
 
         async def legacy_record():
             async with app.state.interview_store.db_sessions.begin() as db:
-                account = Candidate(
+                account = Account(
                     id=uuid.uuid4(),
                     email=f"historical-{uuid.uuid4().hex}@example.com",
                     hashed_password="historical-test-hash",

@@ -29,27 +29,26 @@ from rehearse_ai.accounts.service import AccountService, MailDeliveryError
 from rehearse_ai.config import ConfigurationError, Settings
 from rehearse_ai.invitations.access import (
     SESSION_COOKIE,
-    BlueprintContent,
     assignment_public,
     candidate_session,
     invitation_assignment,
-    now,
     session_expiry,
     set_candidate_cookie,
     token_digest,
 )
 from rehearse_ai.jobs import JobRunner, enqueue
 from rehearse_ai.models import (
+    Account,
     AssignmentAudit,
-    BlueprintVersion,
-    Candidate,
-    CandidateInterviewSession,
+    CandidateSession,
     InterviewAssignment,
-    InterviewBlueprint,
     InterviewJob,
+    InterviewPlan,
+    InterviewPlanVersion,
     InterviewPreparation,
     InterviewRecord,
     TranscriptEntry,
+    utcnow,
 )
 from rehearse_ai.plans.preparation import (
     MAX_REVISION_REQUEST,
@@ -57,6 +56,7 @@ from rehearse_ai.plans.preparation import (
     PrepareHandler,
     ReviseHandler,
 )
+from rehearse_ai.plans.schema import InterviewPlanContent
 from rehearse_ai.records.images import KINDS, LIMITS, InvalidSnapshot, save_snapshot
 from rehearse_ai.records.store import TERMINAL, InterviewStore
 from rehearse_ai.scheduling.documents import MAX_UPLOAD_BYTES as MAX_DOCUMENT_BYTES
@@ -129,9 +129,9 @@ def create_app(settings: Settings) -> FastAPI:
     async def lifespan(_app: FastAPI):
         try:
             async with db_sessions() as db:
-                await db.execute(select(Candidate.id).limit(1))
+                await db.execute(select(Account.id).limit(1))
                 await db.execute(select(InterviewRecord.id).limit(1))
-                await db.execute(select(InterviewBlueprint.id).limit(1))
+                await db.execute(select(InterviewPlan.id).limit(1))
                 await db.execute(select(InterviewJob.id).limit(1))
         except SQLAlchemyError:
             raise RuntimeError(
@@ -143,9 +143,9 @@ def create_app(settings: Settings) -> FastAPI:
                 update(InterviewAssignment)
                 .where(
                     InterviewAssignment.status == "assigned",
-                    InterviewAssignment.latest_start_at < now(),
+                    InterviewAssignment.latest_start_at < utcnow(),
                 )
-                .values(status="expired", updated_at=now())
+                .values(status="expired", updated_at=utcnow())
             )
         await store.start()
         if settings.job_runner:
@@ -287,11 +287,11 @@ def create_app(settings: Settings) -> FastAPI:
 
     async def public_plan(db: AsyncSession, assignment: InterviewAssignment):
         """The validated plan, or None while it is pending, failed or no longer valid."""
-        if assignment.blueprint_version_id is None:
+        if assignment.plan_version_id is None:
             return None
-        version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
+        version = await db.get(InterviewPlanVersion, assignment.plan_version_id)
         try:
-            return BlueprintContent.model_validate(version.content) if version else None
+            return InterviewPlanContent.model_validate(version.content) if version else None
         except ValidationError:
             return None
 
@@ -321,21 +321,21 @@ def create_app(settings: Settings) -> FastAPI:
                 or len(token) < 32
                 or len(token) > 128
                 or assignment.status != "assigned"
-                or assignment.invitation_expires_at <= now()
+                or assignment.invitation_expires_at <= utcnow()
             ):
                 raise HTTPException(404, "Invitation unavailable")
             existing = await transaction.scalars(
-                select(CandidateInterviewSession).where(
-                    CandidateInterviewSession.assignment_id == assignment.id,
-                    CandidateInterviewSession.revoked_at.is_(None),
+                select(CandidateSession).where(
+                    CandidateSession.assignment_id == assignment.id,
+                    CandidateSession.revoked_at.is_(None),
                 )
             )
             for prior in existing:
-                prior.revoked_at = now()
+                prior.revoked_at = utcnow()
             session_token = secrets.token_urlsafe(32)
             expires = session_expiry(assignment)
             transaction.add(
-                CandidateInterviewSession(
+                CandidateSession(
                     digest=token_digest(session_token),
                     assignment_id=assignment.id,
                     expires_at=expires,
@@ -357,7 +357,7 @@ def create_app(settings: Settings) -> FastAPI:
     async def candidate_interview_info(request: Request, db: Db) -> dict:
         assignment = await candidate_session(db, request)
         data = assignment_public(assignment, await public_plan(db, assignment))
-        instant = now()
+        instant = utcnow()
         # Begin stays unavailable until the server knows a valid plan is ready.
         data["can_begin"] = (
             assignment.status == "assigned"
@@ -390,7 +390,7 @@ def create_app(settings: Settings) -> FastAPI:
             if current.status != "assigned":
                 raise HTTPException(409, "Name cannot change after the interview starts")
             current.self_reported_name = name
-            current.updated_at = now()
+            current.updated_at = utcnow()
         return {"name": name, "identity_verified": False}
 
     @app.post("/api/candidate/logout")
@@ -399,9 +399,9 @@ def create_app(settings: Settings) -> FastAPI:
         token = request.cookies.get(SESSION_COOKIE)
         if token:
             async with db_sessions.begin() as transaction:
-                row = await transaction.get(CandidateInterviewSession, token_digest(token))
+                row = await transaction.get(CandidateSession, token_digest(token))
                 if row:
-                    row.revoked_at = now()
+                    row.revoked_at = utcnow()
         response = Response(status_code=204)
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
@@ -421,7 +421,7 @@ def create_app(settings: Settings) -> FastAPI:
             "role": "admin",
         }
 
-    async def require_admin(request: Request, db: AsyncSession) -> Candidate:
+    async def require_admin(request: Request, db: AsyncSession) -> Account:
         user = await accounts.require_user(request, db)
         if not user.is_superuser:
             raise HTTPException(403, "Administrator access required")
@@ -435,7 +435,7 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/api/admin/blueprint-versions/{version_id}")
     async def blueprint_version_detail(version_id: uuid.UUID, request: Request, db: Db) -> dict:
         await require_admin(request, db)
-        item = await db.get(BlueprintVersion, version_id)
+        item = await db.get(InterviewPlanVersion, version_id)
         if item is None:
             raise HTTPException(404, "Plan version not found")
         return {"id": str(item.id), "version": item.version, "content": item.content}
@@ -473,9 +473,7 @@ def create_app(settings: Settings) -> FastAPI:
         return [
             {
                 "id": str(item.id),
-                "blueprint_version_id": str(item.blueprint_version_id)
-                if item.blueprint_version_id
-                else None,
+                "blueprint_version_id": str(item.plan_version_id) if item.plan_version_id else None,
                 "revision": (
                     {
                         "status": latest_revision[item.id].status,
@@ -518,22 +516,20 @@ def create_app(settings: Settings) -> FastAPI:
                 .limit(20)
             )
         ).all()
-        versions: list[BlueprintVersion] = []
-        if prep is not None and prep.blueprint_id is not None:
+        versions: list[InterviewPlanVersion] = []
+        if prep is not None and prep.plan_id is not None:
             versions = list(
                 (
                     await db.scalars(
-                        select(BlueprintVersion)
-                        .where(BlueprintVersion.blueprint_id == prep.blueprint_id)
-                        .order_by(BlueprintVersion.version)
+                        select(InterviewPlanVersion)
+                        .where(InterviewPlanVersion.plan_id == prep.plan_id)
+                        .order_by(InterviewPlanVersion.version)
                     )
                 ).all()
             )
         return {
             "id": str(item.id),
-            "blueprint_version_id": str(item.blueprint_version_id)
-            if item.blueprint_version_id
-            else None,
+            "blueprint_version_id": str(item.plan_version_id) if item.plan_version_id else None,
             "candidate_email": item.candidate_email,
             "candidate_name": item.candidate_name,
             "focus_areas": item.adjustments.get("focus_areas", []),
@@ -592,21 +588,21 @@ def create_app(settings: Settings) -> FastAPI:
                 )
                 if item is None or item.status != "assigned":
                     raise HTTPException(409, "Only an unstarted interview can be changed")
-                if item.preparation_status != "ready" or item.blueprint_version_id is None:
+                if item.preparation_status != "ready" or item.plan_version_id is None:
                     raise HTTPException(409, "The plan must be ready before requesting changes")
                 await enqueue(
                     transaction,
                     assignment_id=item.id,
                     kind="revise",
                     created_by=admin.id,
-                    payload={"request": text, "base_version_id": str(item.blueprint_version_id)},
+                    payload={"request": text, "base_version_id": str(item.plan_version_id)},
                 )
                 transaction.add(
                     AssignmentAudit(
                         assignment_id=item.id,
                         actor_id=admin.id,
                         action="revision_requested",
-                        occurred_at=now(),
+                        occurred_at=utcnow(),
                         detail={},
                     )
                 )
@@ -629,12 +625,12 @@ def create_app(settings: Settings) -> FastAPI:
                     item is None
                     or item.status != "assigned"
                     or item.preparation_status != "failed"
-                    or item.blueprint_version_id is not None
+                    or item.plan_version_id is not None
                 ):
                     raise HTTPException(409, "Preparation can only be retried after it fails")
                 item.preparation_status = "pending"
                 item.preparation_error = None
-                item.updated_at = now()
+                item.updated_at = utcnow()
                 await enqueue(
                     transaction, assignment_id=item.id, kind="prepare", created_by=admin.id
                 )
@@ -643,7 +639,7 @@ def create_app(settings: Settings) -> FastAPI:
                         assignment_id=item.id,
                         actor_id=admin.id,
                         action="preparation_retried",
-                        occurred_at=now(),
+                        occurred_at=utcnow(),
                         detail={},
                     )
                 )
@@ -751,21 +747,21 @@ def create_app(settings: Settings) -> FastAPI:
             if item is None or item.status != "assigned":
                 raise HTTPException(409, "Only an unstarted assignment can be cancelled")
             item.status = "cancelled"
-            item.updated_at = now()
+            item.updated_at = utcnow()
             sessions_for_assignment = await transaction.scalars(
-                select(CandidateInterviewSession).where(
-                    CandidateInterviewSession.assignment_id == assignment_id,
-                    CandidateInterviewSession.revoked_at.is_(None),
+                select(CandidateSession).where(
+                    CandidateSession.assignment_id == assignment_id,
+                    CandidateSession.revoked_at.is_(None),
                 )
             )
             for session in sessions_for_assignment:
-                session.revoked_at = now()
+                session.revoked_at = utcnow()
             transaction.add(
                 AssignmentAudit(
                     assignment_id=assignment_id,
                     actor_id=admin.id,
                     action="cancelled",
-                    occurred_at=now(),
+                    occurred_at=utcnow(),
                     detail={},
                 )
             )
@@ -783,7 +779,7 @@ def create_app(settings: Settings) -> FastAPI:
         }
 
     async def accessible_record(
-        db: AsyncSession, record_id: uuid.UUID, user: Candidate, *, admin: bool
+        db: AsyncSession, record_id: uuid.UUID, user: Account, *, admin: bool
     ) -> InterviewRecord:
         record = await db.get(InterviewRecord, record_id)
         if record is None or (not admin and record.candidate_id != user.id):
@@ -809,7 +805,7 @@ def create_app(settings: Settings) -> FastAPI:
             data["pdf_error"] = record.pdf_error
             data["coverage"] = record.coverage_summary
             data["plan_version_id"] = (
-                str(record.blueprint_version_id) if record.blueprint_version_id else None
+                str(record.plan_version_id) if record.plan_version_id else None
             )
         return data
 
@@ -825,8 +821,8 @@ def create_app(settings: Settings) -> FastAPI:
         if status and status not in {"starting", "in_progress", *TERMINAL}:
             raise HTTPException(400, "Invalid interview status")
         query = (
-            select(InterviewRecord, Candidate.email, InterviewAssignment.candidate_email)
-            .outerjoin(Candidate, Candidate.id == InterviewRecord.candidate_id)
+            select(InterviewRecord, Account.email, InterviewAssignment.candidate_email)
+            .outerjoin(Account, Account.id == InterviewRecord.candidate_id)
             .outerjoin(InterviewAssignment, InterviewAssignment.id == InterviewRecord.assignment_id)
         )
         if candidate_id is not None:
@@ -835,7 +831,7 @@ def create_app(settings: Settings) -> FastAPI:
             pattern = candidate_email.strip().casefold()
             query = query.where(
                 or_(
-                    Candidate.email.contains(pattern, autoescape=True),
+                    Account.email.contains(pattern, autoescape=True),
                     InterviewAssignment.candidate_email.contains(pattern, autoescape=True),
                 )
             )
@@ -906,7 +902,7 @@ def create_app(settings: Settings) -> FastAPI:
             assignment = await db.get(InterviewAssignment, record.assignment_id)
             address = assignment.candidate_email
         else:
-            candidate = await db.get(Candidate, record.candidate_id)
+            candidate = await db.get(Account, record.candidate_id)
             address = candidate.email
         return record_data(record, address, admin=True)
 
@@ -1159,7 +1155,7 @@ def create_app(settings: Settings) -> FastAPI:
                 record = await transaction.get(InterviewRecord, record_id)
                 record.status = "failed"
                 record.termination_reason = "signalling_failed"
-                record.ended_at = now()
+                record.ended_at = utcnow()
                 record.pdf_status = "pending"
                 assigned = await transaction.get(InterviewAssignment, assignment.id)
                 assigned.status = "failed"
@@ -1170,7 +1166,7 @@ def create_app(settings: Settings) -> FastAPI:
                 record = await transaction.get(InterviewRecord, record_id)
                 record.status = "failed"
                 record.termination_reason = "signalling_rejected"
-                record.ended_at = now()
+                record.ended_at = utcnow()
                 record.pdf_status = "pending"
                 assigned = await transaction.get(InterviewAssignment, assignment.id)
                 assigned.status = "failed"

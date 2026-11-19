@@ -23,10 +23,10 @@ from support import (
 from rehearse_ai.accounts.service import MailDeliveryError
 from rehearse_ai.jobs import JobRunner
 from rehearse_ai.models import (
-    BlueprintVersion,
-    Candidate,
+    Account,
     InterviewAssignment,
     InterviewJob,
+    InterviewPlanVersion,
     InterviewPreparation,
     InterviewRecord,
 )
@@ -98,13 +98,13 @@ class Env:
             }
             versions = (
                 await db.scalars(
-                    select(BlueprintVersion)
+                    select(InterviewPlanVersion)
                     .join(
                         InterviewPreparation,
-                        InterviewPreparation.blueprint_id == BlueprintVersion.blueprint_id,
+                        InterviewPreparation.plan_id == InterviewPlanVersion.plan_id,
                     )
                     .where(InterviewPreparation.assignment_id == assignment_id)
-                    .order_by(BlueprintVersion.version)
+                    .order_by(InterviewPlanVersion.version)
                 )
             ).all()
             return assignment, jobs, list(versions)
@@ -129,7 +129,7 @@ class Env:
                 created_by=self.admin_id,
                 payload={
                     "request": request,
-                    "base_version_id": str(assignment.blueprint_version_id),
+                    "base_version_id": str(assignment.plan_version_id),
                 },
             )
 
@@ -138,7 +138,7 @@ class Env:
 async def env(tmp_path, admin_email):
     app = make_app(tmp_path, FakeGenerator(generated_plan()))
     async with app.state.jobs.db_sessions() as db:
-        admin_id = await db.scalar(select(Candidate.id).where(Candidate.email == admin_email))
+        admin_id = await db.scalar(select(Account.id).where(Account.email == admin_email))
         await db.execute(
             update(InterviewJob)
             .where(InterviewJob.status.in_(["queued", "running"]))
@@ -169,7 +169,7 @@ async def test_prepare_creates_a_validated_versioned_plan_with_normalised_budget
     assignment, jobs, versions = await env.state(assignment_id)
     assert assignment.preparation_status == "ready" and assignment.preparation_error is None
     assert [v.version for v in versions] == [1]
-    assert assignment.blueprint_version_id == versions[0].id
+    assert assignment.plan_version_id == versions[0].id
     plan = versions[0].content
     assert plan["target_minutes"] == 30 and len(plan["questions"]) == 5
     assert sum(q["budget_seconds"] for q in plan["questions"]) in range(1525, 1536)
@@ -190,7 +190,7 @@ async def test_model_failure_retries_with_backoff_then_succeeds(env):
     assert jobs["prepare"].status == "queued" and jobs["prepare"].attempts == 1
     assert jobs["prepare"].last_error == "model_error"
     assert jobs["prepare"].run_after > env.runner.clock()
-    assert assignment.blueprint_version_id is None and assignment.preparation_status == "preparing"
+    assert assignment.plan_version_id is None and assignment.preparation_status == "preparing"
     assert await env.runner.drain() == 0  # not due yet
     env.advance(seconds=31)
     await env.runner.drain()
@@ -212,7 +212,7 @@ async def test_exhausted_preparation_fails_visibly_and_blocks_begin(env):
     assert (
         assignment.preparation_status == "failed" and assignment.preparation_error == "model_error"
     )
-    assert versions == [] and assignment.blueprint_version_id is None
+    assert versions == [] and assignment.plan_version_id is None
     await env.update(assignment_id, self_reported_name="Nyla Example")
     with pytest.raises(ValueError, match="unavailable"):
         await env.app.state.interview_store.create_assignment_attempt(assignment_id, "b", "p")
@@ -426,7 +426,7 @@ async def test_stale_preparation_result_is_discarded_not_applied(env):
             break
     await env.runner.execute(job_a)  # A completes its model call, then must be refused
     assignment, jobs, versions = await env.state(assignment_id)
-    assert versions == [] and assignment.blueprint_version_id is None
+    assert versions == [] and assignment.plan_version_id is None
     assert holder["b"].id == job_a.id and jobs["prepare"].status == "running"
     env.app.state.plan_generator = FakeGenerator(generated_plan())
     await env.runner.execute(holder["b"])
@@ -451,7 +451,7 @@ async def test_cancelling_during_preparation_discards_the_generated_plan(env):
     await env.runner.drain()
     assignment, jobs, versions = await env.state(assignment_ref["id"])
     assert assignment.status == "cancelled" and versions == []
-    assert assignment.blueprint_version_id is None
+    assert assignment.plan_version_id is None
     assert jobs["prepare"].status == "cancelled"
     assert jobs["prepare"].last_error == "assignment_started_or_cancelled"
 
@@ -473,7 +473,7 @@ async def test_starting_during_a_revision_rejects_the_late_result(env):
     await env.runner.drain()
     assignment, jobs, versions = await env.state(assignment_id)
     assert [v.version for v in versions] == [1]  # the running interview keeps what it started with
-    assert assignment.blueprint_version_id == versions[0].id
+    assert assignment.plan_version_id == versions[0].id
     assert jobs["revise"].status == "cancelled" and jobs["revise"].last_error == "stale_revision"
 
 
@@ -491,7 +491,7 @@ async def test_revision_creates_a_new_version_and_a_failed_one_leaves_the_plan_i
     assignment, jobs, versions = await env.state(assignment_id)
     assert jobs["revise"].status == "failed" and jobs["revise"].last_error == "model_error"
     assert assignment.preparation_status == "ready" and len(versions) == 1
-    assert assignment.blueprint_version_id == versions[0].id
+    assert assignment.plan_version_id == versions[0].id
     # A successful revision becomes version 2 without editing version 1.
     generator = FakeGenerator(revised_plan())
     env.app.state.plan_generator = generator
@@ -501,7 +501,7 @@ async def test_revision_creates_a_new_version_and_a_failed_one_leaves_the_plan_i
     assignment, jobs, versions = await env.state(assignment_id)
     assert [v.version for v in versions] == [1, 2]
     assert versions[0].content == original
-    assert assignment.blueprint_version_id == versions[1].id
+    assert assignment.plan_version_id == versions[1].id
     prompt, payload = generator.calls[0]
     assert prompt == "plan_revise" and payload["current_plan"]["title"] == original["title"]
     assert payload["revision_request"].startswith("Replace the last question")
@@ -518,7 +518,7 @@ async def test_revision_creates_a_new_version_and_a_failed_one_leaves_the_plan_i
     assert started.plan["title"].endswith("(revised)")
     async with env.db() as db:
         record = await db.get(InterviewRecord, started.record_id)
-        assert record.blueprint_version_id == versions[1].id
+        assert record.plan_version_id == versions[1].id
     # After the interview has started, a late revision is rejected outright.
     await env.enqueue_revision(assignment_id)
     await env.runner.drain()

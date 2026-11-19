@@ -10,9 +10,9 @@ from fastapi_users import exceptions
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from rehearse_ai.accounts.service import AccountService, CandidateCreate
+from rehearse_ai.accounts.service import AccountCreate, AccountService
 from rehearse_ai.config import AuthConfig
-from rehearse_ai.models import Candidate
+from rehearse_ai.models import Account
 
 
 async def promote(email: str, database_url: str) -> str:
@@ -22,9 +22,7 @@ async def promote(email: str, database_url: str) -> str:
     try:
         sessions = async_sessionmaker(engine)
         async with sessions.begin() as db:
-            user = await db.scalar(
-                select(Candidate).where(Candidate.email == email.strip().casefold())
-            )
+            user = await db.scalar(select(Account).where(Account.email == email.strip().casefold()))
             if user is None:
                 raise ValueError("Account not found")
             if not user.is_active:
@@ -45,11 +43,11 @@ async def create_admin(email: str, password: str, database_url: str, secret: str
         service = AccountService(AuthConfig(database_url=database_url, secret=secret), sessions)
         async with sessions() as db:
             address = email.strip().casefold()
-            if await db.scalar(select(Candidate.id).where(Candidate.email == address)):
+            if await db.scalar(select(Account.id).where(Account.email == address)):
                 raise ValueError("Account already exists; use promotion instead")
             try:
                 user = await service.manager(db).create(
-                    CandidateCreate(email=address, password=password), safe=True
+                    AccountCreate(email=address, password=password), safe=True
                 )
             except exceptions.InvalidPasswordException as exc:
                 raise ValueError(str(exc.reason)) from exc

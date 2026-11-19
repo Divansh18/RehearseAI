@@ -1,4 +1,11 @@
-"""Persistent candidate accounts and revocable authentication records."""
+"""Database models: every persisted entity, in one place because the tables reference each other.
+
+Names: ``Account`` is the administrator account (original table name ``candidate``); a candidate
+session is restricted invitation access (``CandidateSession``, table
+``candidate_interview_session``); an attempt is an ``InterviewRecord``; plans live in the
+original ``interview_blueprint*`` tables. Table and column names are kept so existing databases
+and migrations stay valid.
+"""
 
 import uuid
 from datetime import UTC, datetime
@@ -23,11 +30,19 @@ class Base(DeclarativeBase):
     pass
 
 
-class Candidate(SQLAlchemyBaseUserTableUUID, Base):
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+class Account(SQLAlchemyBaseUserTableUUID, Base):
+    """An administrator account (candidates use invitations, not accounts). Table: ``candidate``."""
+
     __tablename__ = "candidate"
 
 
-class SessionToken(SQLAlchemyBaseAccessTokenTableUUID, Base):
+class AccountSessionToken(SQLAlchemyBaseAccessTokenTableUUID, Base):
+    """An administrator's login session. Table: ``candidate_session`` (original name)."""
+
     __tablename__ = "candidate_session"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -57,7 +72,9 @@ class RateBucket(Base):
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
-class InterviewBlueprint(Base):
+class InterviewPlan(Base):
+    """The plan for one assignment. Table and column names keep their original `blueprint` names."""
+
     __tablename__ = "interview_blueprint"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -67,13 +84,18 @@ class InterviewBlueprint(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class BlueprintVersion(Base):
+class InterviewPlanVersion(Base):
+    """One immutable plan version, stored in the original `interview_blueprint_version` table."""
+
     __tablename__ = "interview_blueprint_version"
     __table_args__ = (UniqueConstraint("blueprint_id", "version", name="uq_blueprint_version"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    blueprint_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("interview_blueprint.id", ondelete="RESTRICT"), nullable=False, index=True
+    plan_id: Mapped[uuid.UUID] = mapped_column(
+        "blueprint_id",
+        ForeignKey("interview_blueprint.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[dict] = mapped_column(JSON, nullable=False)
@@ -88,8 +110,10 @@ class InterviewAssignment(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     # Null until automatic preparation has produced a valid plan version.
-    blueprint_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT"), nullable=True
+    plan_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        "blueprint_version_id",
+        ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     candidate_email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
     candidate_name: Mapped[str | None] = mapped_column(String(120))
@@ -113,7 +137,7 @@ class InterviewAssignment(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class CandidateInterviewSession(Base):
+class CandidateSession(Base):
     __tablename__ = "candidate_interview_session"
 
     digest: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -163,8 +187,8 @@ class InterviewRecord(Base):
     # records made before room images existed: those are camera-only stills.
     snapshot_kind: Mapped[str | None] = mapped_column(String(12))
     # The plan version this attempt ran, frozen atomically when the attempt starts.
-    blueprint_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT")
+    plan_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        "blueprint_version_id", ForeignKey("interview_blueprint_version.id", ondelete="RESTRICT")
     )
     # Number-only account of questions asked, covered, skipped for time or not reached.
     coverage_summary: Mapped[dict | None] = mapped_column(JSON)
@@ -212,8 +236,8 @@ class InterviewPreparation(Base):
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("candidate.id", ondelete="RESTRICT"), nullable=False
     )
-    blueprint_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("interview_blueprint.id", ondelete="RESTRICT")
+    plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        "blueprint_id", ForeignKey("interview_blueprint.id", ondelete="RESTRICT")
     )
     idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)

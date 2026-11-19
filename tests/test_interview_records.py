@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from rehearse_ai.accounts.cli import promote
 from rehearse_ai.interview.session_log import SessionLog
-from rehearse_ai.models import Candidate, InterviewRecord, TranscriptEntry
+from rehearse_ai.models import Account, InterviewRecord, TranscriptEntry
 from rehearse_ai.records.conversation_pdf import build_pdf
 from rehearse_ai.records.images import InvalidSnapshot, save_snapshot
 from rehearse_ai.records.store import InterviewStore
@@ -32,7 +32,7 @@ def address() -> str:
 
 
 async def make_candidate(sessions, *, email=None):
-    candidate = Candidate(
+    candidate = Account(
         id=uuid.uuid4(),
         email=email or address(),
         hashed_password="test-hash",
@@ -281,11 +281,11 @@ async def test_admin_promotion_requires_existing_active_account():
     try:
         unverified = await make_candidate(sessions)
         async with sessions.begin() as db:
-            candidate = await db.get(Candidate, unverified.id)
+            candidate = await db.get(Account, unverified.id)
             candidate.is_verified = False
         assert await promote(unverified.email, TEST_URL) == unverified.email
         async with sessions.begin() as db:
-            candidate = await db.get(Candidate, unverified.id)
+            candidate = await db.get(Account, unverified.id)
             assert candidate.is_superuser and not candidate.is_verified
             candidate.is_active = False
             candidate.is_superuser = False
@@ -294,7 +294,7 @@ async def test_admin_promotion_requires_existing_active_account():
         with pytest.raises(ValueError, match="not found"):
             await promote(address(), TEST_URL)
         async with sessions() as db:
-            assert not (await db.get(Candidate, unverified.id)).is_superuser
+            assert not (await db.get(Account, unverified.id)).is_superuser
     finally:
         await engine.dispose()
 

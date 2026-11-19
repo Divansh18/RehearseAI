@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from rehearse_ai.accounts.cli import create_admin
 from rehearse_ai.accounts.service import digest, utcnow
 from rehearse_ai.config import AuthConfig, Settings
-from rehearse_ai.models import ActionToken, SessionToken
+from rehearse_ai.models import AccountSessionToken, ActionToken
 from rehearse_ai.server import create_app
 
 TEST_URL = os.environ.get(
@@ -85,7 +85,10 @@ def test_admin_login_expiry_logout_and_protected_routes(admin_client):
     assert client.get("/interview").status_code == 401
     token = client.cookies["rehearse_session"]
     change_timestamp(
-        SessionToken, token, {"created_at": utcnow() - timedelta(days=1)}, SessionToken.token
+        AccountSessionToken,
+        token,
+        {"created_at": utcnow() - timedelta(days=1)},
+        AccountSessionToken.token,
     )
     assert client.get("/api/auth/me").status_code == 401
     assert (

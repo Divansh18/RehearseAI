@@ -1,7 +1,7 @@
 """Automatic interview-plan preparation and optional natural-language revision.
 
 The model proposes; Python validates. A generated plan is accepted only if it satisfies
-``BlueprintContent`` and the checks below (question count for the duration, no duplicated
+``InterviewPlanContent`` and the checks below (question count for the duration, no duplicated
 substance, résumé-grounded questions backed by a verbatim span of the résumé, normalised
 time budgets). Résumé, job-description, instruction and revision text are untrusted data.
 No transaction is held open across a model call, and a failed or stale revision never
@@ -19,8 +19,6 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.interview.budget import QUESTION_SHARE
-from rehearse_ai.invitations.access import BlueprintContent, now
 from rehearse_ai.jobs import (
     ClaimedJob,
     JobCancelled,
@@ -30,11 +28,13 @@ from rehearse_ai.jobs import (
 )
 from rehearse_ai.models import (
     AssignmentAudit,
-    BlueprintVersion,
     InterviewAssignment,
-    InterviewBlueprint,
+    InterviewPlan,
+    InterviewPlanVersion,
     InterviewPreparation,
+    utcnow,
 )
+from rehearse_ai.plans.schema import QUESTION_SHARE, InterviewPlanContent
 from rehearse_ai.prompts import load_prompt
 
 MAX_REVISION_REQUEST = 1000
@@ -171,7 +171,7 @@ def _tokens(text: str) -> set[str]:
 
 def validate_generated_plan(
     raw: dict[str, Any], *, resume_text: str, target_minutes: int
-) -> BlueprintContent:
+) -> InterviewPlanContent:
     """Turn model output into a trusted plan or explain precisely what was wrong."""
     items = raw.get("questions")
     if not isinstance(items, list):
@@ -228,7 +228,7 @@ def validate_generated_plan(
     for item, weight in zip(cleaned, weights, strict=True):
         item["budget_seconds"] = int(min(900, max(30, round(weight * scale))))
     try:
-        return BlueprintContent.model_validate(
+        return InterviewPlanContent.model_validate(
             {
                 "title": raw.get("title"),
                 "purpose": raw.get("purpose"),
@@ -265,7 +265,7 @@ async def generate_plan(
     *,
     current_plan: dict[str, Any] | None = None,
     revision_request: str | None = None,
-) -> BlueprintContent:
+) -> InterviewPlanContent:
     low, high = question_range(inputs.target_minutes)
     payload: dict[str, Any] = {
         "target_minutes": inputs.target_minutes,
@@ -295,10 +295,10 @@ async def generate_plan(
 # --- job handlers -------------------------------------------------------------------
 
 
-async def _next_version(db: AsyncSession, blueprint_id: uuid.UUID) -> int:
+async def _next_version(db: AsyncSession, plan_id: uuid.UUID) -> int:
     latest = await db.scalar(
-        select(func.max(BlueprintVersion.version)).where(
-            BlueprintVersion.blueprint_id == blueprint_id
+        select(func.max(InterviewPlanVersion.version)).where(
+            InterviewPlanVersion.plan_id == plan_id
         )
     )
     return (latest or 0) + 1
@@ -323,7 +323,7 @@ class PrepareHandler:
             assignment = await db.get(InterviewAssignment, job.assignment_id, with_for_update=True)
             if assignment is None or assignment.status != "assigned":
                 raise JobCancelled("assignment_unavailable")
-            if assignment.blueprint_version_id is not None:
+            if assignment.plan_version_id is not None:
                 raise JobCancelled("already_prepared")
             prep = await db.scalar(
                 select(InterviewPreparation).where(
@@ -340,7 +340,7 @@ class PrepareHandler:
             )
             assignment.preparation_status = "preparing"
             assignment.preparation_error = None
-            assignment.updated_at = now()
+            assignment.updated_at = utcnow()
         # No transaction is open during the model call.
         plan = await generate_plan(self.generator(), "plan_prepare", inputs)
         async with self.db_sessions.begin() as db:
@@ -348,16 +348,16 @@ class PrepareHandler:
             assignment = await db.get(InterviewAssignment, job.assignment_id, with_for_update=True)
             if assignment is None or assignment.status != "assigned":
                 raise JobCancelled("assignment_started_or_cancelled")
-            if assignment.blueprint_version_id is not None:
+            if assignment.plan_version_id is not None:
                 raise JobCancelled("already_prepared")
             prep = await db.scalar(
                 select(InterviewPreparation).where(
                     InterviewPreparation.assignment_id == job.assignment_id
                 )
             )
-            instant = now()
+            instant = utcnow()
             content = plan.model_dump(mode="json")
-            blueprint = InterviewBlueprint(
+            blueprint = InterviewPlan(
                 id=uuid.uuid4(),
                 created_by=job.created_by,
                 draft=content,
@@ -366,17 +366,17 @@ class PrepareHandler:
             )
             db.add(blueprint)
             await db.flush()
-            version = BlueprintVersion(
+            version = InterviewPlanVersion(
                 id=uuid.uuid4(),
-                blueprint_id=blueprint.id,
+                plan_id=blueprint.id,
                 version=1,
                 content=content,
                 published_at=instant,
             )
             db.add(version)
             await db.flush()
-            prep.blueprint_id = blueprint.id
-            assignment.blueprint_version_id = version.id
+            prep.plan_id = blueprint.id
+            assignment.plan_version_id = version.id
             assignment.preparation_status = "ready"
             assignment.preparation_error = None
             assignment.updated_at = instant
@@ -396,11 +396,11 @@ class PrepareHandler:
             if (
                 assignment is not None
                 and assignment.status == "assigned"
-                and assignment.blueprint_version_id is None
+                and assignment.plan_version_id is None
             ):
                 assignment.preparation_status = "failed"
                 assignment.preparation_error = code
-                assignment.updated_at = now()
+                assignment.updated_at = utcnow()
 
 
 class ReviseHandler:
@@ -425,10 +425,10 @@ class ReviseHandler:
             if (
                 assignment is None
                 or assignment.status != "assigned"
-                or str(assignment.blueprint_version_id) != base_id
+                or str(assignment.plan_version_id) != base_id
             ):
                 raise JobCancelled("plan_changed")
-            version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
+            version = await db.get(InterviewPlanVersion, assignment.plan_version_id)
             prep = await db.scalar(
                 select(InterviewPreparation).where(
                     InterviewPreparation.assignment_id == job.assignment_id
@@ -443,7 +443,7 @@ class ReviseHandler:
                 prep.target_minutes,
             )
             current = dict(version.content)
-            blueprint_id = version.blueprint_id
+            plan_id = version.plan_id
         plan = await generate_plan(
             self.generator(),
             "plan_revise",
@@ -458,21 +458,21 @@ class ReviseHandler:
             if (
                 assignment is None
                 or assignment.status != "assigned"
-                or str(assignment.blueprint_version_id) != base_id
+                or str(assignment.plan_version_id) != base_id
             ):
                 raise JobCancelled("stale_revision")
-            instant = now()
-            number = await _next_version(db, blueprint_id)
-            version = BlueprintVersion(
+            instant = utcnow()
+            number = await _next_version(db, plan_id)
+            version = InterviewPlanVersion(
                 id=uuid.uuid4(),
-                blueprint_id=blueprint_id,
+                plan_id=plan_id,
                 version=number,
                 content=plan.model_dump(mode="json"),
                 published_at=instant,
             )
             db.add(version)
             await db.flush()
-            assignment.blueprint_version_id = version.id
+            assignment.plan_version_id = version.id
             assignment.updated_at = instant
             db.add(
                 AssignmentAudit(

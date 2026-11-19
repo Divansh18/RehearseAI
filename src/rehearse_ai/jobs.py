@@ -20,13 +20,13 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.models import InterviewJob
+from rehearse_ai.models import InterviewJob, utcnow
 
 LOGGER = logging.getLogger(__name__)
 ERROR_MAX = 64
@@ -71,10 +71,6 @@ class JobHandler(Protocol):
     async def run(self, job: ClaimedJob) -> None: ...
 
     async def exhausted(self, job: ClaimedJob, code: str) -> None: ...
-
-
-def utcnow() -> datetime:
-    return datetime.now(UTC)
 
 
 async def verify_claim(db: AsyncSession, job: ClaimedJob) -> InterviewJob:

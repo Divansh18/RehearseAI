@@ -13,14 +13,14 @@ from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rehearse_ai.invitations.access import BlueprintContent
 from rehearse_ai.models import (
-    BlueprintVersion,
-    Candidate,
+    Account,
     InterviewAssignment,
+    InterviewPlanVersion,
     InterviewRecord,
     TranscriptEntry,
 )
+from rehearse_ai.plans.schema import InterviewPlanContent
 from rehearse_ai.records.conversation_pdf import build_pdf
 
 LOGGER = logging.getLogger(__name__)
@@ -163,11 +163,11 @@ class InterviewStore:
                 raise ValueError("Confirm your full name before beginning")
             if assignment.preparation_status in {"pending", "preparing"}:
                 raise ValueError("Your interview is still being prepared. Try again shortly.")
-            if assignment.preparation_status != "ready" or assignment.blueprint_version_id is None:
+            if assignment.preparation_status != "ready" or assignment.plan_version_id is None:
                 raise ValueError("The interview plan is unavailable. Contact the interviewer.")
-            version = await db.get(BlueprintVersion, assignment.blueprint_version_id)
+            version = await db.get(InterviewPlanVersion, assignment.plan_version_id)
             try:
-                plan = BlueprintContent.model_validate(
+                plan = InterviewPlanContent.model_validate(
                     version.content if version else None
                 ).model_dump(mode="json")
             except ValidationError:
@@ -188,7 +188,7 @@ class InterviewStore:
                     last_event_sequence=0,
                     pdf_status="not_ready",
                     snapshot_status="not_started",
-                    blueprint_version_id=version.id,
+                    plan_version_id=version.id,
                 )
             )
         return AttemptStart(record_id, version.id, plan)
@@ -479,11 +479,11 @@ class InterviewStore:
                     candidate_name = assignment.self_reported_name or assignment.candidate_name
                     timezone_name = assignment.timezone
                 else:
-                    candidate = await db.get(Candidate, record.candidate_id)
+                    candidate = await db.get(Account, record.candidate_id)
                     candidate_email = candidate.email
                     candidate_name = None
-                if record.blueprint_version_id:
-                    version = await db.get(BlueprintVersion, record.blueprint_version_id)
+                if record.plan_version_id:
+                    version = await db.get(InterviewPlanVersion, record.plan_version_id)
                     content = (
                         version.content if version and isinstance(version.content, dict) else {}
                     )

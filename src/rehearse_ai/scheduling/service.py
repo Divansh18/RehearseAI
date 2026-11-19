@@ -21,15 +21,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from rehearse_ai.accounts.service import MailDeliveryError, Mailer
-from rehearse_ai.invitations.access import BlueprintContent, invitation_token, now, token_digest
+from rehearse_ai.invitations.access import invitation_token, token_digest
 from rehearse_ai.jobs import ClaimedJob, JobCancelled, JobError, enqueue, verify_claim
 from rehearse_ai.models import (
     AssignmentAudit,
-    BlueprintVersion,
-    CandidateInterviewSession,
+    CandidateSession,
     InterviewAssignment,
+    InterviewPlanVersion,
     InterviewPreparation,
+    utcnow,
 )
+from rehearse_ai.plans.schema import InterviewPlanContent
 from rehearse_ai.scheduling.documents import (
     DocumentError,
     detect_kind,
@@ -228,7 +230,7 @@ async def schedule_interview(
     start = latest = None
     try:
         start, latest = resolve_window(
-            fields.scheduled_local, fields.timezone, fields.join_window_minutes, instant=now()
+            fields.scheduled_local, fields.timezone, fields.join_window_minutes, instant=utcnow()
         )
     except ScheduleRejected as exc:
         errors.extend(exc.errors)
@@ -285,14 +287,14 @@ async def schedule_interview(
         if errors or resume_doc is None:
             raise ScheduleRejected(errors)
 
-        instant = now()
+        instant = utcnow()
         assignment_id = uuid.uuid4()
         try:
             async with db_sessions.begin() as db:
                 db.add(
                     InterviewAssignment(
                         id=assignment_id,
-                        blueprint_version_id=None,
+                        plan_version_id=None,
                         candidate_email=str(fields.candidate_email).strip().casefold(),
                         candidate_name=fields.candidate_name,
                         adjustments={},
@@ -386,19 +388,19 @@ async def send_invitation(
         if (
             assignment is None
             or assignment.status != "assigned"
-            or assignment.latest_start_at <= now()
+            or assignment.latest_start_at <= utcnow()
         ):
             raise InvitationUnavailable
-        instant = now()
+        instant = utcnow()
         assignment.invitation_digest = token_digest(token)
         assignment.invitation_expires_at = assignment.latest_start_at
         assignment.mail_status = "sending"
         assignment.updated_at = instant
         await transaction.execute(
-            update(CandidateInterviewSession)
+            update(CandidateSession)
             .where(
-                CandidateInterviewSession.assignment_id == assignment_id,
-                CandidateInterviewSession.revoked_at.is_(None),
+                CandidateSession.assignment_id == assignment_id,
+                CandidateSession.revoked_at.is_(None),
             )
             .values(revoked_at=instant)
         )
@@ -414,15 +416,15 @@ async def send_invitation(
     async with db_sessions() as db:
         assignment = await db.get(InterviewAssignment, assignment_id)
         version = (
-            await db.get(BlueprintVersion, assignment.blueprint_version_id)
-            if assignment.blueprint_version_id
+            await db.get(InterviewPlanVersion, assignment.plan_version_id)
+            if assignment.plan_version_id
             else None
         )
     # Scheduled interviews use a stable generic title so the email never waits for the plan.
     title = "Candidate interview"
     minutes = assignment.target_minutes
     if version is not None and assignment.target_minutes is None:
-        content = BlueprintContent.model_validate(version.content)
+        content = InterviewPlanContent.model_validate(version.content)
         title, minutes = content.title, content.target_minutes
     try:
         await mailer.send_invitation(
@@ -446,7 +448,7 @@ async def send_invitation(
                     assignment_id=assignment_id,
                     actor_id=actor_id,
                     action="mail_result",
-                    occurred_at=now(),
+                    occurred_at=utcnow(),
                     detail={"mail_status": status},
                 )
             )
