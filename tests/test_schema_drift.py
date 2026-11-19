@@ -1,36 +1,49 @@
-"""The models and the migrations differ only in the documented ways (migrations/SCHEMA_DRIFT.md).
+"""The ORM metadata and the migrations describe the same schema.
 
-This pins the exact set rather than asserting "no drift", so that new drift fails loudly while the
-known index differences stay documented instead of being fixed by a blind migration. It compares the
-models against the test database, which is migrated to head (see CONTRIBUTING.md).
+The migrations are authoritative. Two checks keep the models honest:
+
+* Alembic's comparison of the models against the migrated test database (types and server
+  defaults included) finds nothing.
+* A database built from the models alone has the same indexes (names, uniqueness, partial
+  predicates), column defaults and constraints as the migrated one. This covers what Alembic's
+  comparison does not look at: CHECK constraints and unique-constraint names.
+
+The only intentional difference is Alembic's own ``alembic_version`` table, which the models do
+not describe. The test database is migrated to head (see CONTRIBUTING.md).
 """
 
 import asyncio
+import uuid
 
+import asyncpg
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 from support import TEST_URL
 
 from rehearse_ai.models import Base
 
-# Same columns, different name: the migrations named these by hand.
-RENAMED = {
-    ("candidate_interview_session", "ix_candidate_interview_session_assignment"),
-    ("interview_assignment", "ix_assignment_email"),
-    ("interview_assignment_audit", "ix_assignment_audit_assignment"),
-    ("interview_blueprint_version", "ix_blueprint_version_blueprint"),
-    ("interview_job", "ix_job_assignment"),
-}
-# Present in the database (migrations 0003, 0006), not declared on the models.
-UNDECLARED = {
-    ("interview_job", "uq_job_active"),
-    ("interview_job", "ix_job_claim"),
-    ("interview_record", "ix_interview_record_created_at"),
+CATALOGUE = {
+    "indexes": (
+        "select tablename, indexname, indexdef from pg_indexes "
+        "where schemaname = 'public' and tablename <> 'alembic_version' order by 1, 2"
+    ),
+    "columns": (
+        "select table_name, column_name, column_default, is_nullable, data_type "
+        "from information_schema.columns "
+        "where table_schema = 'public' and table_name <> 'alembic_version' order by 1, 2"
+    ),
+    "constraints": (
+        "select conrelid::regclass::text, conname, pg_get_constraintdef(oid) from pg_constraint "
+        "where connamespace = 'public'::regnamespace "
+        "and conrelid::regclass::text <> 'alembic_version' order by 1, 2"
+    ),
 }
 
 
-def differences() -> list[tuple]:
+def test_alembic_finds_no_difference_between_models_and_migrations():
     async def collect():
         engine = create_async_engine(TEST_URL)
         try:
@@ -38,7 +51,8 @@ def differences() -> list[tuple]:
 
                 def compare(sync_connection):
                     context = MigrationContext.configure(
-                        sync_connection, opts={"compare_type": True}
+                        sync_connection,
+                        opts={"compare_type": True, "compare_server_default": True},
                     )
                     return compare_metadata(context, Base.metadata)
 
@@ -46,18 +60,45 @@ def differences() -> list[tuple]:
         finally:
             await engine.dispose()
 
-    return asyncio.run(collect())
+    assert asyncio.run(collect()) == []
 
 
-def test_only_the_documented_index_differences_exist():
-    found = differences()
-    assert all(entry[0] in {"add_index", "remove_index"} for entry in found), found
-    removed = {
-        (entry[1].table.name, entry[1].name) for entry in found if entry[0] == "remove_index"
-    }
-    added = {(entry[1].table.name, entry[1].name) for entry in found if entry[0] == "add_index"}
-    assert removed == RENAMED | UNDECLARED
-    # Each rename's replacement is the model-generated name on the same table; nothing else is new.
-    assert {table for table, _ in added} == {table for table, _ in RENAMED}
-    assert len(added) == len(RENAMED)
-    assert len(found) == 13
+def test_a_database_built_from_the_models_matches_the_migrated_one():
+    url = make_url(TEST_URL)
+    scratch = f"rehearse_models_only_{uuid.uuid4().hex[:8]}_test"
+    admin_dsn = url.set(drivername="postgresql", database="postgres").render_as_string(
+        hide_password=False
+    )
+
+    async def snapshot(database: str) -> dict[str, list[tuple]]:
+        engine = create_async_engine(url.set(database=database))
+        try:
+            async with engine.connect() as connection:
+                return {
+                    name: [tuple(row) for row in await connection.execute(text(query))]
+                    for name, query in CATALOGUE.items()
+                }
+        finally:
+            await engine.dispose()
+
+    async def build_from_models() -> dict[str, list[tuple]]:
+        admin = await asyncpg.connect(admin_dsn)
+        try:
+            await admin.execute(f'CREATE DATABASE "{scratch}"')
+            engine = create_async_engine(url.set(database=scratch))
+            try:
+                async with engine.begin() as connection:
+                    await connection.run_sync(Base.metadata.create_all)
+            finally:
+                await engine.dispose()
+            return await snapshot(scratch)
+        finally:
+            await admin.execute(f'DROP DATABASE IF EXISTS "{scratch}"')
+            await admin.close()
+
+    async def both():
+        return await snapshot(url.database), await build_from_models()
+
+    migrated, from_models = asyncio.run(both())
+    for name in CATALOGUE:
+        assert from_models[name] == migrated[name], name

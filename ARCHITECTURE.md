@@ -202,6 +202,9 @@ Renaming was done in code, not in contracts. These keep their original names:
 * **Browser contract**: the `snapshot_acknowledged` field of the offer and the `/snapshot` upload
   route, even though the stored object is now a room image.
 
+The models and the migrations describe the same schema (indexes, server defaults, CHECK constraints);
+see `migrations/MODELS_AND_MIGRATIONS.md`. `tests/test_schema_drift.py` keeps them in agreement.
+
 ## Known structural debt
 
 Honest list of what is *not* yet clean. None of it changes behaviour.
@@ -215,10 +218,5 @@ Honest list of what is *not* yet clean. None of it changes behaviour.
   migration note once nothing reads them.
 * Capability services raise `fastapi.HTTPException` for refusals (`invitations`, `scheduling.assignments`,
   `records`). A domain error type mapped in `server/` would let those packages drop FastAPI.
-* `alembic check` reports 13 index differences between the models and the migrations: five
-  index-name pairs (naming drift only) and three indexes that exist in the database but are not
-  declared on the models, one of which (`uq_job_active`) is a real uniqueness guarantee. No column,
-  type or constraint differs. They are documented precisely in `migrations/SCHEMA_DRIFT.md` and pinned
-  by `tests/test_schema_drift.py`; no migration has been generated for them.
 * `jobs.py` sits beside the packages that use it rather than inside one of them; it is shared
   infrastructure for scheduling and plans.
