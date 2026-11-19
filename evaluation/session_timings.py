@@ -1,7 +1,7 @@
 # ruff: noqa: E501
 """Per-stage timings and sequencing diagnostics from one local session log. Prints no text.
 
-    uv run python evaluation/session_timings.py sessions/<id>.jsonl
+    uv run --project backend python evaluation/session_timings.py sessions/<id>.jsonl
 
 Works on older logs (derived from raw events) and newer ones (``response_latency`` events are
 shown as recorded). All times are the server's monotonic clock. "Output started" is server

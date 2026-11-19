@@ -1,7 +1,7 @@
 """Bounded real-model checks of conversational pieces, using INVENTED content only.
 
-    uv run python evaluation/conversation_check.py opening     # greeting acknowledgements
-    uv run python evaluation/conversation_check.py decisions   # live decision latency (Stage B)
+    uv run --project backend python evaluation/conversation_check.py opening    # acknowledgements
+    uv run --project backend python evaluation/conversation_check.py decisions  # decision latency
 
 This measures the *model call*, not speech recognition, turn detection or audio. It uses the
 configured OPENAI_API_KEY and model, makes a small fixed number of requests and prints no keys.
@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend" / "tests"))
 
 from openai import AsyncOpenAI
 

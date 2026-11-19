@@ -5,7 +5,8 @@ extractor, call the configured OpenAI model through ``generate_plan`` and report
 duplication, duration fit and a revision. It prints no keys. Each scenario makes at most a few
 model calls. Results are for human review; they are not a pass/fail test.
 
-    uv run python evaluation/plan_preparation_check.py [--out evaluation/plan_checks]
+    uv run --project backend python evaluation/plan_preparation_check.py \
+        [--out evaluation/plan_checks]
 """
 
 import argparse

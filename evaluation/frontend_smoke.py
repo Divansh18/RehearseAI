@@ -23,7 +23,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = ROOT / ".venv" / "bin" / "python"
+PYTHON = ROOT / "backend" / ".venv" / "bin" / "python"
 PORT = int(os.environ.get("SMOKE_PORT", "7971"))
 TEST_URL = os.environ.get(
     "REHEARSE_TEST_DATABASE_URL",
@@ -33,7 +33,7 @@ assert TEST_URL.rsplit("/", 1)[-1].endswith("_test"), "refusing to use a non-tes
 
 SEED = """
 import asyncio, json, sys
-sys.path.insert(0, "tests")
+sys.path.insert(0, "backend/tests")
 from support import new_admin_email, seed_assignment, PASSWORD
 email = new_admin_email()
 assignment_id, _version, token = asyncio.run(seed_assignment(email))
