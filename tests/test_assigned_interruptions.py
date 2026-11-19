@@ -373,4 +373,4 @@ async def test_a_transcript_that_arrives_after_the_boundary_shows_as_negative_wa
     now[0] += 0.4
     session.transcript_segment("late", frame_timestamp="t", finalized=True, frame_id=2)
     # The measurement keeps whatever was observed: the late transcript is visible as negative.
-    assert session._marks["last_stt"] - session._marks["turn_complete"] == pytest.approx(0.4)
+    assert session._timeline.gap_ms("last_stt", "turn_complete") == 400

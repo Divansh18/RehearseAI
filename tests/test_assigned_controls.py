@@ -12,15 +12,15 @@ import pytest
 from support import plan_dict
 
 from rehearse_ai.interview.controller import Stage, UtteranceKind
-from rehearse_ai.interview.controls import interpret
-from rehearse_ai.interview.session import (
+from rehearse_ai.interview.controls import (
     FEEDBACK_DECLINED,
     FINISH_CLARIFICATION,
     OUTCOME_UNKNOWN,
     REPEAT_EXHAUSTED,
     RESTART_UNAVAILABLE,
-    InterviewSession,
+    interpret,
 )
+from rehearse_ai.interview.session import InterviewSession
 from rehearse_ai.interview.session_log import SessionLog
 
 Q = [item["question"] for item in plan_dict()["questions"]]

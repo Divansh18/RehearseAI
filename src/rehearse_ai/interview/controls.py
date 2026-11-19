@@ -262,3 +262,29 @@ def interpret(text: str) -> Intent:
         # "...and that's how it worked. I'm done." is an answer with a sign-off, not a request.
         return Intent(residual=left)
     return Intent(kind=kind, gap=gap, subject=subject, residual=left)
+
+
+# Spoken text for assigned-interview controls. Fixed on purpose: nothing here comes from a model, so
+# none of it can invent a contact, a policy or a promise about the outcome.
+FEEDBACK_DECLINED = (
+    "I can't provide interview feedback. "
+    "Whenever you're ready, you can answer, or ask me to repeat the question."
+)
+RESTART_UNAVAILABLE = (
+    "I can't restart the interview or go back to an earlier question in this session. "
+    "I can repeat the current question, or we can end the interview."
+)
+FINISH_CLARIFICATION = (
+    "Would you like to end the interview, or are you finished with this question?"
+)
+REPEAT_EXHAUSTED = (
+    "I've already repeated that. You can answer as best you can, tell me you don't know, "
+    "or ask to end the interview."
+)
+OUTCOME_UNKNOWN = (
+    "I don't have any information about hiring decisions, contacts or next steps. "
+    "I can repeat the question, or we can end the interview."
+)
+OFF_TOPIC_REPLY = (
+    "Let's stay with the interview. You can answer the current question or ask me to repeat it."
+)

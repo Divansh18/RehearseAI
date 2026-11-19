@@ -4,7 +4,6 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from rehearse_ai.interview.browser_events import candidate_event
@@ -26,11 +25,33 @@ from rehearse_ai.interview.controller import (
     UtteranceKind,
 )
 from rehearse_ai.interview.controls import (
+    FEEDBACK_DECLINED,
+    FINISH_CLARIFICATION,
+    OFF_TOPIC_REPLY,
+    OUTCOME_UNKNOWN,
+    REPEAT_EXHAUSTED,
+    RESTART_UNAVAILABLE,
     Intent,
     interpret,
 )
 from rehearse_ai.interview.memory import FactField
+from rehearse_ai.interview.phrases import (
+    AFFIRM,
+    FLOOR_CONTROL,
+    NAME_TOKEN,
+    REPEAT,
+    SKIP,
+    CorrectionRequest,
+    classify_greeting_readiness,
+    fallback_opening_ack,
+    is_sentence_request,
+    letters_as_name,
+    parse_correction,
+    spoken_name_spelling,
+)
 from rehearse_ai.interview.session_log import SessionLog
+from rehearse_ai.interview.speech_output import SpeechOutput
+from rehearse_ai.interview.timeline import ResponseTimeline
 
 # The opening is one exchange: greeting, the candidate's reply, a short acknowledgement and a
 # transition. If the candidate says nothing it moves on after this wait. The whole opening is
@@ -40,227 +61,13 @@ from rehearse_ai.interview.session_log import SessionLog
 HEARD_MIN_SECS = 1.5
 HEARD_MIN_FRACTION = 0.5
 WORDS_PER_SECOND = 2.6
-# Short floor-control phrases ("go on", "yes please cut") are not answers.
-_FLOOR_CONTROL = re.compile(
-    r"^(?:(?:yes|yeah|yep|okay|ok|sure|sorry|please|thanks|thank you|go on|go ahead|continue|"
-    r"carry on|hold on|wait|one second|just a second|never mind|cut|cut in|cut it)[,.!?\s]*){1,5}$",
-    re.I,
-)
-# Spoken text for assigned-interview controls. Fixed on purpose: nothing here comes from a model, so
-# none of it can invent a contact, a policy or a promise about the outcome.
-FEEDBACK_DECLINED = (
-    "I can't provide interview feedback. "
-    "Whenever you're ready, you can answer, or ask me to repeat the question."
-)
-RESTART_UNAVAILABLE = (
-    "I can't restart the interview or go back to an earlier question in this session. "
-    "I can repeat the current question, or we can end the interview."
-)
-FINISH_CLARIFICATION = (
-    "Would you like to end the interview, or are you finished with this question?"
-)
-REPEAT_EXHAUSTED = (
-    "I've already repeated that. You can answer as best you can, tell me you don't know, "
-    "or ask to end the interview."
-)
-OUTCOME_UNKNOWN = (
-    "I don't have any information about hiring decisions, contacts or next steps. "
-    "I can repeat the question, or we can end the interview."
-)
-OFF_TOPIC_REPLY = (
-    "Let's stay with the interview. You can answer the current question or ask me to repeat it."
-)
-# A plain "yes" is only taken as agreement when it answers the end-of-interview clarification.
-_AFFIRM = re.compile(
-    r"(?:yes|yeah|yep|sure|please do|yes please|end it|that's right|correct)[\s.!,]*", re.I
-)
 OPENING_REPLY_WAIT_SECS = 12.0
 OPENING_ACK_TIMEOUT_SECS = 4.0
 _OPENING_KINDS = {UtteranceKind.GREETING, UtteranceKind.OPENING_ACK}
-_NAME_TOKEN = re.compile(r"[^\W\d_][^\W\d_'’.\-]*(?:['’.\-][^\W\d_]+)*")
-
 Infer = Callable[[str, dict[str, Any]], Awaitable[Mapping[str, Any]]]
 Speak = Callable[[Utterance], Awaitable[None]]
 Publish = Callable[[dict[str, Any]], None]
 CancelAudio = Callable[[], Awaitable[None]]
-
-_REPEAT = re.compile(
-    r"^(?:(?:sorry|pardon|excuse me),?\s+)?(?:please\s+)?(?:can you\s+|could you\s+|would you\s+)?"
-    r"(?:repeat(?: that| the (?:question|last question))?"
-    r"|say (?:that|the question) again)(?:\s+one more time)?\??[.!]?$",
-    re.IGNORECASE,
-)
-_SKIP = re.compile(r"^(?:please\s+)?(?:skip(?: this question)?|next question)\??[.!]?$", re.I)
-_CORRECTION = re.compile(
-    r"^\s*(?:(?:actually|sorry)\s*[, ]\s*)?"
-    r"(?P<cue>it's|it is|i said|i meant|i used|my name is)\s+"
-    r"(?P<replacement>.+?)\s*,?\s+not\s+(?P<superseded>[^.!?,]+)"
-    r"(?P<remainder>[.!?,].*)?$",
-    re.I,
-)
-
-
-@dataclass(frozen=True)
-class _CorrectionRequest:
-    cue: str
-    replacement: str
-    superseded: str
-    remainder: str
-
-
-def _parse_correction(text: str) -> _CorrectionRequest | None:
-    clauses = re.split(r"(?<=[.!?])\s+", text.replace("’", "'").strip())
-    for index, clause in enumerate(clauses):
-        match = _CORRECTION.fullmatch(clause)
-        if match:
-            remainder = [*clauses[:index]]
-            remainder.extend(
-                part for part in [(match["remainder"] or "").lstrip(".!?, ").strip()] if part
-            )
-            remainder.extend(clauses[index + 1 :])
-            return _CorrectionRequest(
-                match["cue"].lower(),
-                match["replacement"].strip(" ,"),
-                match["superseded"].strip(),
-                " ".join(remainder).strip(),
-            )
-    return None
-
-
-_DEFER_READINESS = re.compile(
-    r"\b(?:not (?:ready|yet|now)|do not (?:start|begin)|do not want to"
-    r"|give me (?:a |one )?(?:moment|minute|second)|need (?:a |one )?(?:moment|minute|second)"
-    r"|hold on|wait|maybe later|not quite|later)\b"
-)
-_AFFIRM_READINESS = re.compile(
-    r"\b(?:i am ready(?: to (?:start|begin|go))?|i am good to go"
-    r"|let us (?:get|go) into it|let us (?:start|begin|go|do it)"
-    r"|we can (?:start|begin)|go ahead|ready to (?:start|begin|go))"
-    r"(?: now| please)?$"
-)
-_BARE_AFFIRM_READINESS = re.compile(
-    r"(?:yes|yeah|yep|sure|okay|ok|absolutely|of course|sounds good|ready"
-    r"|start|begin|let us go|let us do it)(?: now| please)?"
-)
-_FINAL_START = re.compile(r"\b(?:start|begin)(?: now| please)?$")
-_NAME_SPELLING = re.compile(
-    r"^\s*(?:(?:actually|sorry)[, ]+)?"
-    r"(?P<cue>my name is spelled|i spell my name(?: as)?|"
-    r"i spell it(?: as)?|(?:it's|it is) spelled|spelled(?: as)?)\s+"
-    r"(?P<letters>.+?)\s*$",
-    re.I,
-)
-_NON_NAMES = {
-    "a",
-    "an",
-    "bit",
-    "can",
-    "doing",
-    "fine",
-    "good",
-    "great",
-    "happy",
-    "here",
-    "hello",
-    "hey",
-    "hi",
-    "okay",
-    "ok",
-    "ready",
-    "really",
-    "sorry",
-    "tired",
-    "well",
-    "nervous",
-    "no",
-    "nah",
-    "not",
-    "so",
-    "very",
-    "yes",
-    "yeah",
-    "yep",
-    "start",
-    "begin",
-    "sure",
-    "spelled",
-    "you",
-}
-
-
-def _letters_as_name(text: str, *, allow_word: bool = False) -> str | None:
-    parts = re.findall(r"[^\W\d_]+", text, re.UNICODE)
-    if len(parts) >= 2 and all(len(part) == 1 for part in parts):
-        name = "".join(parts)
-        return name[0].upper() + name[1:].lower() if len(name) <= 40 else None
-    if allow_word and len(parts) == 1 and len(parts[0]) <= 40:
-        word = parts[0]
-        return word[0].upper() + word[1:]
-    return None
-
-
-def _spoken_name_spelling(text: str, *, prompted: bool) -> tuple[str, str] | None:
-    # Deepgram may punctuate individually spoken letters as separate sentences.
-    joined = re.sub(r"\b([^\W\d_])\.\s+(?=[^\W\d_]\.)", r"\1 ", text)
-    clauses = re.split(r"(?<=[.!?])\s+", joined.strip())
-    for index, clause in enumerate(clauses):
-        match = _NAME_SPELLING.fullmatch(clause.strip(" .!?"))
-        if match:
-            cue = match["cue"].lower()
-            if not prompted and "name" not in cue:
-                continue
-            name = _letters_as_name(match["letters"], allow_word=True)
-        elif prompted:
-            name = _letters_as_name(clause.strip(" .!?"))
-        else:
-            name = None
-        if name and name.casefold() not in _NON_NAMES:
-            remainder = " ".join([*clauses[:index], *clauses[index + 1 :]]).strip()
-            return name, remainder
-    return None
-
-
-def _is_sentence_request(pattern: re.Pattern[str], text: str) -> bool:
-    """Recognize a whole control clause even after a separate preamble."""
-    return any(pattern.fullmatch(clause.strip()) for clause in re.split(r"(?<=[.!?])\s+", text))
-
-
-def _classify_readiness(text: str) -> Readiness:
-    normalized = text.lower().replace("’", "'")
-    for old, new in {"i'm": "i am", "let's": "let us", "don't": "do not"}.items():
-        normalized = normalized.replace(old, new)
-    words = re.findall(r"[a-z]+", normalized)
-    words = [word for index, word in enumerate(words) if index == 0 or word != words[index - 1]]
-    normalized = " ".join(words)
-    if normalized in {"no", "nah", "nope"}:
-        return Readiness.DEFERRED
-    if _DEFER_READINESS.search(normalized):
-        return Readiness.DEFERRED
-    if (
-        _AFFIRM_READINESS.search(normalized)
-        or _BARE_AFFIRM_READINESS.fullmatch(normalized)
-        or _FINAL_START.search(normalized)
-    ):
-        return Readiness.READY
-    return Readiness.UNCLEAR
-
-
-def _classify_greeting_readiness(text: str) -> Readiness:
-    classification = _classify_readiness(text)
-    if classification is not Readiness.UNCLEAR:
-        return classification
-    clauses = [_classify_readiness(clause) for clause in re.split(r"[.!?]+", text)]
-    if Readiness.DEFERRED in clauses:
-        return Readiness.DEFERRED
-    if Readiness.READY in clauses:
-        return Readiness.READY
-    return Readiness.UNCLEAR
-
-
-def _fallback_opening_ack(text: str) -> str:
-    if re.search(r"\bhow (?:are|r|about) you\b|\bhow's it going\b", text, re.I):
-        return "Doing well, thanks."
-    return "Thanks for telling me."
 
 
 class InterviewSession:
@@ -283,7 +90,14 @@ class InterviewSession:
         self._plan = interview_plan
         self._now = clock or time.monotonic
         self._clock = ActiveClock(self._now)
-        self._marks: dict[str, float] = {}
+        self._timeline = ResponseTimeline(self._now)
+        self._speech = SpeechOutput(
+            pending=lambda: self.controller.pending,
+            closed=lambda: self._closed,
+            paused=lambda: self._media_paused,
+            record=self._record,
+            mark=self._timeline.mark,
+        )
         self._output_started_at: dict[int, float] = {}
         self._closing_replays = 0
         self._finish_clarified = False
@@ -328,13 +142,6 @@ class InterviewSession:
         self._last_delivered_prompt: Utterance | None = None
         self._last_project_prompt: Utterance | None = None
         self._output_started_ids: set[int] = set()
-        self._tts_completed_ids: set[int] = set()
-        self._tts_contexts: dict[str, int] = {}
-        self._tts_context_history: dict[str, int] = {}
-        self._tts_context_started_at: dict[str, float] = {}
-        self._tts_audio_stats: dict[str, list[int]] = {}
-        self._provider_tts_stats: dict[str, list[float | int]] = {}
-        self._first_audio_ids: set[int] = set()
         self._interrupted_output_id: int | None = None
         self._cancelled_output_stop_debt = 0
         self._last_turn_end: float | None = None
@@ -355,7 +162,7 @@ class InterviewSession:
         self._end_reason = "user_request"
         self._interrupted_candidate_turn: str | None = None
         self._project_prompt_for_detour: Utterance | None = None
-        self._pending_correction: _CorrectionRequest | None = None
+        self._pending_correction: CorrectionRequest | None = None
 
     @property
     def response_task(self) -> asyncio.Task[None] | None:
@@ -386,11 +193,7 @@ class InterviewSession:
             if pending.id in self._output_started_ids:
                 self._cancelled_output_stop_debt += 1
             self._speaking_id = None
-            self._tts_contexts = {
-                context: identifier
-                for context, identifier in self._tts_contexts.items()
-                if identifier != pending.id
-            }
+            self._speech.forget_utterance(pending.id)
             self._record(
                 "agent_interrupted",
                 speaker="agent",
@@ -431,7 +234,7 @@ class InterviewSession:
     def _first_name(name: str | None) -> str:
         """The first name to address, from the confirmed name. Plain data: never put in a prompt."""
         token = name.split()[0] if name and name.split() else ""
-        return token if token and len(token) <= 30 and _NAME_TOKEN.fullmatch(token) else ""
+        return token if token and len(token) <= 30 and NAME_TOKEN.fullmatch(token) else ""
 
     def _greeting_for(self, self_reported_name: str | None) -> str:
         first = self._first_name(self_reported_name)
@@ -514,7 +317,7 @@ class InterviewSession:
             controller.submit_greeting(answer)
         else:
             return
-        if _classify_greeting_readiness(answer) is Readiness.READY:
+        if classify_greeting_readiness(answer) is Readiness.READY:
             await self._queue_speech(
                 controller.prepare_opening_transition("Great, let's get started.")
             )
@@ -533,11 +336,11 @@ class InterviewSession:
         )
         ack = ""
         try:
-            self._mark("decision_start")
+            self._timeline.mark("decision_start")
             result = await asyncio.wait_for(
                 self._infer("opening_ack", {"greeting_response": reply}), OPENING_ACK_TIMEOUT_SECS
             )
-            self._mark("decision_done")
+            self._timeline.mark("decision_done")
             ack = str(result.get("text", "")).strip()
         except asyncio.CancelledError:
             raise
@@ -557,7 +360,7 @@ class InterviewSession:
                 r"\b(?:strength|weakness|score|feedback|improve|coach|great job)\b", ack, re.I
             )
         ):
-            ack = _fallback_opening_ack(reply)
+            ack = fallback_opening_ack(reply)
         if generation != self._generation or self._closed or self._media_paused:
             self._record("inference_stale_discarded", speaker=None, generation=generation)
             return
@@ -572,48 +375,16 @@ class InterviewSession:
             self.controller.prepare_opening_transition(f"{ack} Let's get started.")
         )
 
-    def _mark(self, name: str, *, first: bool = False) -> None:
-        if not first or name not in self._marks:
-            self._marks[name] = self._now()
-
     def _record_response_latency(self, utterance: Utterance) -> None:
-        """Server-side breakdown of one response, from the end of the candidate's speech.
-
-        Every value is a difference between two server monotonic readings. ``output_started`` is
-        Pipecat's transport output, not browser playback; ``vad_stop`` is a Silero estimate of
-        the end of speech, not the last audible phoneme. Stages that were not observed are None.
-        """
-        marks, turn_end = self._marks, self._marks.get("turn_complete")
-        if turn_end is None:
-            return
-
-        def gap(later: str, earlier: str) -> int | None:
-            if later in marks and earlier in marks:
-                return round((marks[later] - marks[earlier]) * 1000)
-            return None
-
-        self._record(
-            "response_latency",
-            speaker=None,
-            utterance_id=utterance.id,
-            utterance_kind=utterance.kind.name.lower(),
-            stt_final_after_speech_end_ms=gap("last_stt", "vad_stop"),
-            speech_end_to_turn_complete_ms=gap("turn_complete", "vad_stop"),
-            last_stt_to_turn_complete_ms=gap("turn_complete", "last_stt"),
-            turn_complete_to_model_start_ms=gap("decision_start", "turn_complete"),
-            model_ms=gap("decision_done", "decision_start"),
-            model_done_to_prepared_ms=gap("prepared", "decision_done"),
-            prepared_to_tts_first_audio_ms=gap("first_audio", "prepared"),
-            tts_first_audio_to_output_started_ms=gap("output_started", "first_audio"),
-            turn_complete_to_output_started_ms=gap("output_started", "turn_complete"),
-            speech_end_to_output_started_ms=gap("output_started", "vad_stop"),
-            basis=(
-                "server monotonic clock; output_started is server transport output, not browser "
-                "playback; vad_stop is an estimate of the end of speech"
-            ),
-        )
-        for name in ("turn_complete", "decision_start", "decision_done", "prepared", "first_audio"):
-            marks.pop(name, None)
+        details = self._timeline.latency_details()
+        if details is not None:
+            self._record(
+                "response_latency",
+                speaker=None,
+                utterance_id=utterance.id,
+                utterance_kind=utterance.kind.name.lower(),
+                **details,
+            )
 
     def _heard_enough(self, utterance: Utterance, heard_secs: float) -> bool:
         """Did the candidate plausibly hear enough of this to respond to it?"""
@@ -703,7 +474,7 @@ class InterviewSession:
             self.controller.interrupted_utterance is not None
             and self.controller.interrupted_utterance.kind is UtteranceKind.NAME_PROMPT
         )
-        spelling = _spoken_name_spelling(answer, prompted=prompted)
+        spelling = spoken_name_spelling(answer, prompted=prompted)
         if spelling is None:
             return None
         name, remainder = spelling
@@ -715,7 +486,7 @@ class InterviewSession:
             return None  # Preserve the full greeting as the candidate's original turn.
         if self.controller.stage is Stage.AWAITING_NAME:
             await self._queue_speech(
-                self.controller.submit_name(name, _classify_greeting_readiness(remainder))
+                self.controller.submit_name(name, classify_greeting_readiness(remainder))
             )
             return ""
         if remainder:
@@ -738,7 +509,7 @@ class InterviewSession:
         self._interrupted_output_id = None
         return acknowledgement
 
-    def _correction_field(self, request: _CorrectionRequest) -> FactField | None:
+    def _correction_field(self, request: CorrectionRequest) -> FactField | None:
         old = request.superseded
         matching = [
             field_name
@@ -763,7 +534,7 @@ class InterviewSession:
         return None
 
     async def _route_correction(self, answer: str) -> str | None:
-        request = _parse_correction(answer)
+        request = parse_correction(answer)
         field_name: FactField | None = None
         if self._pending_correction is not None:
             pending = self._pending_correction
@@ -803,7 +574,7 @@ class InterviewSession:
         replacement = request.replacement
         if field_name == "candidate_name":
             replacement = re.sub(r"^spelled\s+", "", replacement, flags=re.I)
-            replacement = _letters_as_name(replacement, allow_word=True) or replacement
+            replacement = letters_as_name(replacement, allow_word=True) or replacement
         if previous and field_name != "candidate_name":
             replacement = re.sub(
                 rf"(?<!\w){re.escape(request.superseded)}(?!\w)",
@@ -898,7 +669,7 @@ class InterviewSession:
 
     def turn_signal(self, signal: str, **details: Any) -> None:
         if signal == "vad_stopped":
-            self._marks["vad_stop"] = self._now()
+            self._timeline.mark("vad_stop")
         if not self._closed:
             self._record(signal, speaker="candidate", turn_number=self._turn_number, **details)
 
@@ -914,7 +685,7 @@ class InterviewSession:
         **provider_details: Any,
     ) -> None:
         if not self._closed:
-            self._marks["last_stt"] = self._now()
+            self._timeline.mark("last_stt")
             self._record(
                 "stt_final_segment",
                 speaker="candidate",
@@ -990,7 +761,7 @@ class InterviewSession:
             # The opening ends when question one is first queued; it counts as active time.
             self._opening_seconds = round(self._clock.active_seconds())
         self._active_prompt_id = utterance.id
-        self._mark("prepared", first=True)
+        self._timeline.mark("prepared", first=True)
         self._record(
             "agent_prepared",
             speaker="agent",
@@ -1025,7 +796,7 @@ class InterviewSession:
         ):
             return
         self._cancel_opening_timer()
-        self._marks.clear()
+        self._timeline.clear()
         self._generation += 1
         task = self._response_task
         if task and not task.done():
@@ -1048,11 +819,7 @@ class InterviewSession:
             if output_started:
                 self._cancelled_output_stop_debt += 1
             self._speaking_id = None
-            self._tts_contexts = {
-                context: identifier
-                for context, identifier in self._tts_contexts.items()
-                if identifier != pending.id
-            }
+            self._speech.forget_utterance(pending.id)
             self._record(
                 "agent_interrupted",
                 speaker="agent",
@@ -1095,7 +862,7 @@ class InterviewSession:
             return
         answer = text.strip()
         self._last_turn_end = time.perf_counter()
-        self._mark("turn_complete")
+        self._timeline.mark("turn_complete")
         continuing = self.controller.stage in {
             Stage.AWAITING_OPENING_ACK,
             Stage.AWAITING_PROPOSAL,
@@ -1140,7 +907,7 @@ class InterviewSession:
             self.controller.interrupted_utterance is not None
             and self.controller.interrupted_utterance.kind is UtteranceKind.CORRECTION_ACK
         ):
-            if not answer or _is_sentence_request(_REPEAT, answer):
+            if not answer or is_sentence_request(REPEAT, answer):
                 await self._queue_speech(self.controller.retry_interrupted())
                 return
             self.controller.accept_interrupted_correction_ack()
@@ -1188,13 +955,13 @@ class InterviewSession:
         if self._finish_clarified:
             # The last thing said was "end the interview, or finished with this question?"
             self._finish_clarified = False
-            if _AFFIRM.fullmatch(answer.strip()):
+            if AFFIRM.fullmatch(answer.strip()):
                 await self._end_early(answer)
                 return
         intent = interpret(answer)
         if intent.is_control and await self._route_assigned_control(intent, answer, interrupted):
             return
-        if _is_sentence_request(_SKIP, answer):
+        if is_sentence_request(SKIP, answer):
             self._apply_time_budget()
             try:
                 next_prompt = (
@@ -1220,7 +987,7 @@ class InterviewSession:
                 await self._queue_speech(self.controller.retry_interrupted())
                 return
             if self._interrupted_output_id != interrupted.id:
-                if _FLOOR_CONTROL.fullmatch(answer.strip()):
+                if FLOOR_CONTROL.fullmatch(answer.strip()):
                     # "Go on" / "yes please cut" over a prompt that was barely heard: replay it.
                     # These words are neither an answer nor a reason to spend a probe.
                     self._record("floor_control_replay", speaker=None, utterance_id=interrupted.id)
@@ -1551,9 +1318,9 @@ class InterviewSession:
             llm_first_token_ms=None,
         )
         try:
-            self._mark("decision_start")
+            self._timeline.mark("decision_start")
             result = await self._infer("assigned_decision", self._assigned_payload())
-            self._mark("decision_done")
+            self._timeline.mark("decision_done")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1728,91 +1495,28 @@ class InterviewSession:
         self._response_task = asyncio.create_task(self._respond(generation))
 
     def tts_context_assigned(self, utterance_id: int, context_id: str) -> None:
-        pending = self.controller.pending
-        if not self._closed and pending is not None and pending.id == utterance_id:
-            self._tts_context_history[context_id] = utterance_id
+        self._speech.context_assigned(utterance_id, context_id)
 
     def tts_context_utterance(self, context_id: str | None) -> int | None:
-        return self._tts_context_history.get(context_id or "")
+        return self._speech.utterance_for(context_id)
 
     def tts_started(self, utterance_id: int, context_id: str | None) -> None:
-        pending = self.controller.pending
-        if pending is None or pending.id != utterance_id or context_id is None:
-            return
-        assigned = self._tts_context_history.get(context_id)
-        if assigned is not None and assigned != utterance_id:
-            return
-        self._tts_contexts[context_id] = utterance_id
-        self._tts_context_history[context_id] = utterance_id
-        self._tts_context_started_at[context_id] = time.perf_counter()
-        self._tts_audio_stats[context_id] = [0, 0]
-        self._record(
-            "tts_started", speaker=None, utterance_id=utterance_id, tts_context_id=context_id
-        )
+        self._speech.started(utterance_id, context_id)
 
     def provider_tts_requested(self, context_id: str, text_length: int) -> None:
-        if self._closed:
-            return
-        self._provider_tts_stats[context_id] = [time.perf_counter(), 0, 0]
-        self._record(
-            "provider_tts_requested",
-            speaker=None,
-            tts_context_id=context_id,
-            utterance_id=self._tts_context_history.get(context_id),
-            text_length=text_length,
-        )
+        self._speech.provider_requested(context_id, text_length)
 
     def provider_tts_audio_chunk(self, context_id: str, byte_count: int) -> None:
-        if self._closed or context_id not in self._provider_tts_stats:
-            return
-        stats = self._provider_tts_stats[context_id]
-        stats[1] += 1
-        stats[2] += byte_count
-        if stats[1] == 1:
-            self._record(
-                "provider_first_audio",
-                speaker=None,
-                tts_context_id=context_id,
-                utterance_id=self._tts_context_history.get(context_id),
-                first_audio_ms=round((time.perf_counter() - stats[0]) * 1000, 1),
-                audio_bytes=byte_count,
-            )
+        self._speech.provider_audio_chunk(context_id, byte_count)
 
     def provider_tts_error(self, context_id: str, error: str, status: int | None) -> None:
-        if self._closed:
-            return
-        match = re.search(r"status:\s*(\d{3})", error)
-        self._record(
-            "provider_tts_error",
-            speaker=None,
-            tts_context_id=context_id,
-            utterance_id=self._tts_context_history.get(context_id),
-            error_type=error if error.isidentifier() else "ErrorFrame",
-            provider_status=status or (int(match.group(1)) if match else None),
-        )
+        self._speech.provider_error(context_id, error, status)
 
     def provider_tts_cancelled(self, context_id: str) -> None:
-        if not self._closed:
-            self._record(
-                "provider_tts_cancelled",
-                speaker=None,
-                tts_context_id=context_id,
-                utterance_id=self._tts_context_history.get(context_id),
-            )
+        self._speech.provider_cancelled(context_id)
 
     def provider_tts_finished(self, context_id: str) -> None:
-        if self._closed or context_id not in self._provider_tts_stats:
-            return
-        started, chunks, byte_count = self._provider_tts_stats.pop(context_id)
-        self._record(
-            "provider_tts_finished",
-            speaker=None,
-            tts_context_id=context_id,
-            utterance_id=self._tts_context_history.get(context_id),
-            duration_ms=round((time.perf_counter() - started) * 1000, 1),
-            audio_chunks=chunks,
-            audio_bytes=byte_count,
-        )
+        self._speech.provider_finished(context_id)
 
     def pipeline_error(
         self,
@@ -1827,7 +1531,7 @@ class InterviewSession:
         match = re.fullmatch(r"TTS context ([0-9a-f-]+) completed with no audio", error or "")
         context_id = match.group(1) if match else None
         utterance_id = (
-            self._tts_context_history.get(context_id)
+            self._speech.utterance_for(context_id)
             if context_id
             else self.controller.pending.id
             if self.controller.pending
@@ -1867,79 +1571,17 @@ class InterviewSession:
             tts_context_id=context_id,
             utterance_id=utterance_id,
             recoverable=bool(match),
-            tts_audio_chunks=self._tts_audio_stats.get(context_id, [0, 0])[0],
-            tts_audio_bytes=self._tts_audio_stats.get(context_id, [0, 0])[1],
-            tts_context_elapsed_ms=(
-                round((time.perf_counter() - self._tts_context_started_at[context_id]) * 1000, 1)
-                if context_id in self._tts_context_started_at
-                else None
-            ),
+            **self._speech.context_summary(context_id),
         )
 
     def tts_audio_chunk(self, context_id: str | None, byte_count: int) -> bool:
-        if self._closed or self._media_paused:
-            return False
-        pending = self.controller.pending
-        if (
-            not context_id
-            or context_id not in self._tts_contexts
-            or pending is None
-            or pending.id != self._tts_contexts[context_id]
-        ):
-            self._record(
-                "stale_tts_audio_discarded",
-                speaker=None,
-                tts_context_id=context_id,
-                audio_bytes=byte_count,
-            )
-            return False
-        stats = self._tts_audio_stats[context_id]
-        stats[0] += 1
-        stats[1] += byte_count
-        self.tts_first_audio(context_id)
-        return True
+        return self._speech.audio_chunk(context_id, byte_count)
 
     def tts_first_audio(self, context_id: str | None) -> None:
-        utterance_id = self._tts_contexts.get(context_id or "")
-        pending = self.controller.pending
-        if (
-            utterance_id is not None
-            and pending is not None
-            and pending.id == utterance_id
-            and utterance_id not in self._first_audio_ids
-        ):
-            self._first_audio_ids.add(utterance_id)
-            self._mark("first_audio", first=True)
-            self._record(
-                "tts_first_audio_generated",
-                speaker=None,
-                utterance_id=utterance_id,
-                tts_context_id=context_id,
-                browser_playback_onset_ms=None,
-            )
+        self._speech.first_audio(context_id)
 
     def tts_finished(self, context_id: str | None) -> bool:
-        utterance_id = self._tts_contexts.pop(context_id or "", None)
-        if utterance_id is None:
-            if not self._closed:
-                self._record(
-                    "stale_tts_stop_discarded",
-                    speaker=None,
-                    tts_context_id=context_id,
-                    utterance_id=self._tts_context_history.get(context_id or ""),
-                )
-            return False
-        self._tts_completed_ids.add(utterance_id)
-        stats = self._tts_audio_stats.get(context_id or "", [0, 0])
-        self._record(
-            "tts_generation_finished",
-            speaker=None,
-            utterance_id=utterance_id,
-            tts_context_id=context_id,
-            audio_chunks=stats[0],
-            audio_bytes=stats[1],
-        )
-        return True
+        return self._speech.finished(context_id)
 
     def bot_started(self) -> None:
         if self._media_paused:
@@ -1947,7 +1589,7 @@ class InterviewSession:
         pending = self.controller.pending
         if pending is None or self._closed or self._speaking_id == pending.id:
             return
-        if pending.id not in self._first_audio_ids:
+        if not self._speech.has_first_audio(pending.id):
             return
         if self._cancelled_output_stop_debt:
             self._record(
@@ -1960,7 +1602,7 @@ class InterviewSession:
         self._speaking_id = pending.id
         self._output_started_ids.add(pending.id)
         self._output_started_at[pending.id] = self._now()
-        self._mark("output_started")
+        self._timeline.mark("output_started")
         elapsed = (
             round((time.perf_counter() - self._last_turn_end) * 1000, 1)
             if self._last_turn_end is not None
@@ -1992,7 +1634,7 @@ class InterviewSession:
             pending is None
             or pending.id != self._speaking_id
             or self._closed
-            or pending.id not in self._tts_completed_ids
+            or not self._speech.generation_completed(pending.id)
         ):
             return
         self._speaking_id = None
