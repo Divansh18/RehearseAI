@@ -5,9 +5,6 @@ from importlib.resources import files
 
 def load_prompt(name: str) -> str:
     if name not in {
-        "decision",
-        "feedback",
-        "early_feedback",
         "opening_ack",
         "tts_style",
         "assigned_decision",

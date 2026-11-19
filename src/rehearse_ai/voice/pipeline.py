@@ -44,66 +44,6 @@ from rehearse_ai.prompts import load_prompt
 from rehearse_ai.voice.interruption import ConfirmedSpeechStartStrategy
 from rehearse_ai.voice.tts import UtteranceMarkerFrame, build_tts_service
 
-DECISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": [
-                "follow_up",
-                "nudge",
-                "clarification",
-                "wait",
-                "advance",
-                "detour",
-                "feedback_request",
-                "off_topic",
-                "coach_identity",
-                "continue",
-                "finish",
-                "end",
-            ],
-        },
-        "text": {"type": "string"},
-        "project_fragment": {"type": "string"},
-        "project_status": {
-            "type": "string",
-            "enum": ["technical_example", "no_example", "nontechnical", "unclear"],
-        },
-        "tone": {"type": "string", "enum": ["neutral", "gentle"]},
-        "facts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "field": {
-                        "type": "string",
-                        "enum": [
-                            "project_name",
-                            "project_purpose",
-                            "contribution",
-                            "technical_challenges",
-                            "testing_evidence",
-                            "technical_terms",
-                            "technologies",
-                        ],
-                    },
-                    "wording": {"type": "string"},
-                },
-                "required": ["field", "wording"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["action", "text", "project_fragment", "project_status", "tone", "facts"],
-    "additionalProperties": False,
-}
-FEEDBACK_SCHEMA = {
-    "type": "object",
-    "properties": {"lines": {"type": "array", "items": {"type": "string"}}},
-    "required": ["lines"],
-    "additionalProperties": False,
-}
 OPENING_SCHEMA = {
     "type": "object",
     "properties": {"text": {"type": "string"}},
@@ -384,15 +324,12 @@ class AudioObserver(FrameProcessor):
 def inference_adapter(llm: OpenAILLMService):
     async def infer(kind: str, payload: dict[str, Any]) -> Mapping[str, Any]:
         schema = {
-            "decision": DECISION_SCHEMA,
             "opening_ack": OPENING_SCHEMA,
-            "feedback": FEEDBACK_SCHEMA,
-            "early_feedback": FEEDBACK_SCHEMA,
             "assigned_decision": ASSIGNED_DECISION_SCHEMA,
         }[kind]
         response = await llm.run_inference(
             LLMContext(messages=[{"role": "user", "content": json.dumps(payload)}]),
-            max_tokens=320 if kind == "decision" else 220,
+            max_tokens=220,
             system_instruction=load_prompt(kind),
             response_schema=schema,
         )

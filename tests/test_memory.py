@@ -4,6 +4,7 @@ import asyncio
 import json
 
 import pytest
+from support import plan_dict
 
 from rehearse_ai.interview.controller import Stage, UtteranceKind
 from rehearse_ai.interview.session import InterviewSession
@@ -28,11 +29,6 @@ async def settle():
 async def question_one(session):
     await session.start()
     deliver(session)
-    session.controller.submit_greeting("I'm doing well")
-    await session._queue_speech(session.controller.prepare_readiness("Good to hear."))
-    deliver(session)
-    await session._queue_speech(session.controller.submit_readiness(True))
-    deliver(session)
     assert session.controller.current_question_number == 1
     assert session.controller.stage is Stage.AWAITING_ANSWER
 
@@ -45,7 +41,12 @@ async def test_spoken_name_correction_is_authoritative_but_later_correction_can_
         return {"action": "wait", "text": ""}
 
     session = InterviewSession(
-        SessionLog(tmp_path, "name"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "name"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     session._remember_spoken_name("Devanj", "My name is Devanj")
     tentative = session.controller.memory.get("candidate_name")
@@ -77,7 +78,12 @@ async def test_spoken_technical_correction_does_not_spend_probe_or_advance(tmp_p
         return {"action": "follow_up", "text": "What did you build?", "facts": []}
 
     session = InterviewSession(
-        SessionLog(tmp_path, "terms"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "terms"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     session.controller.memory.supply(
@@ -115,7 +121,9 @@ async def test_project_name_correction_keeps_raw_stt_and_question(tmp_path):
         raise AssertionError("A name correction alone must not invoke interview inference")
 
     log = SessionLog(tmp_path, "grepai-correction")
-    session = InterviewSession(log, infer, lambda _: settle(), lambda _: None)
+    session = InterviewSession(
+        log, infer, lambda _: settle(), lambda _: None, interview_plan=plan_dict(), opening=False
+    )
     await question_one(session)
     session.controller.memory.supply(
         "project_name", "Graph AI", source_turn=1, supplied_wording="Graph AI"
@@ -144,7 +152,12 @@ async def test_spoken_spelling_with_new_answer_content_is_processed_once(tmp_pat
         return {"action": "follow_up", "text": "What did you build?", "facts": []}
 
     session = InterviewSession(
-        SessionLog(tmp_path, "spelling-answer"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "spelling-answer"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     await session.user_started()
@@ -174,7 +187,12 @@ async def test_correction_with_new_answer_content_processes_content_once(tmp_pat
         return {"action": "follow_up", "text": "What was your role?", "facts": []}
 
     session = InterviewSession(
-        SessionLog(tmp_path, "combined"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "combined"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     await session.user_started()
@@ -193,7 +211,12 @@ async def test_ambiguous_correction_asks_once_without_becoming_an_answer(tmp_pat
         raise AssertionError("Ambiguous correction must not infer an interview answer")
 
     session = InterviewSession(
-        SessionLog(tmp_path, "ambiguous"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "ambiguous"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     await session.user_started()
@@ -216,7 +239,12 @@ async def test_explicit_technology_correction_and_bounded_ambiguous_repetition(t
         raise AssertionError("A correction alone must not invoke decision inference")
 
     session = InterviewSession(
-        SessionLog(tmp_path, "technology"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "technology"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     session.controller.memory.supply(
@@ -250,7 +278,12 @@ async def test_stop_precedes_correction_and_repeat_preserves_question(tmp_path):
         raise AssertionError("No decision inference expected")
 
     session = InterviewSession(
-        SessionLog(tmp_path, "controls"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "controls"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     await session.user_started()
@@ -268,31 +301,6 @@ async def test_stop_precedes_correction_and_repeat_preserves_question(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_facts_require_literal_latest_turn_and_keep_unknown_unknown(tmp_path):
-    async def infer(_kind, _payload):
-        return {
-            "action": "follow_up",
-            "text": "What did you implement?",
-            "facts": [
-                {"field": "project_name", "wording": "PR Guard"},
-                {"field": "technologies", "wording": "PostgreSQL"},
-            ],
-        }
-
-    session = InterviewSession(
-        SessionLog(tmp_path, "facts"), infer, lambda _: settle(), lambda _: None
-    )
-    await question_one(session)
-    await session.user_started()
-    await session.user_stopped("I built PR Guard for GitHub pull requests.")
-    await settle()
-    assert session.controller.memory.get("project_name").value == "PR Guard"
-    assert session.controller.memory.get("project_name").source_turn == 1
-    assert session.controller.memory.get("technologies") is None
-    await session.close()
-
-
-@pytest.mark.asyncio
 async def test_model_cannot_restore_superseded_stt_wording_as_a_fact(tmp_path):
     async def infer(_kind, _payload):
         return {
@@ -302,7 +310,12 @@ async def test_model_cannot_restore_superseded_stt_wording_as_a_fact(tmp_path):
         }
 
     session = InterviewSession(
-        SessionLog(tmp_path, "superseded"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "superseded"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     session.controller.memory.supply(
         "technical_terms",
@@ -336,7 +349,12 @@ async def test_correction_cancels_obsolete_answer_decision(tmp_path):
         return {"action": "advance", "text": "", "facts": []}
 
     session = InterviewSession(
-        SessionLog(tmp_path, "obsolete"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "obsolete"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     await session.user_started()
@@ -375,7 +393,12 @@ async def test_spoken_name_correction_discards_an_obsolete_decision(tmp_path):
         return {"action": "follow_up", "text": "What did you own?", "facts": []}
 
     session = InterviewSession(
-        SessionLog(tmp_path, "manual-stale"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "manual-stale"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     session._remember_spoken_name("Mia", "My name is Mia")
     await question_one(session)
@@ -402,14 +425,14 @@ async def test_correction_during_unheard_question_replays_that_question(tmp_path
         raise AssertionError("Correction alone must not invoke the decision model")
 
     session = InterviewSession(
-        SessionLog(tmp_path, "unheard"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "unheard"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await session.start()
-    deliver(session)
-    session.controller.submit_greeting("I'm well")
-    await session._queue_speech(session.controller.prepare_readiness("Good."))
-    deliver(session)
-    await session._queue_speech(session.controller.submit_readiness(True))
     unheard = session.controller.pending
     await session.user_started()
     await session.user_stopped("I said webhooks, not web books.")
@@ -428,7 +451,12 @@ async def test_interrupted_correction_ack_does_not_become_the_project_answer(tmp
         return {"action": "follow_up", "text": "What did you own?", "facts": []}
 
     session = InterviewSession(
-        SessionLog(tmp_path, "ack-barge"), infer, lambda _: settle(), lambda _: None
+        SessionLog(tmp_path, "ack-barge"),
+        infer,
+        lambda _: settle(),
+        lambda _: None,
+        interview_plan=plan_dict(),
+        opening=False,
     )
     await question_one(session)
     await session.user_started()
@@ -441,64 +469,4 @@ async def test_interrupted_correction_ack_does_not_become_the_project_answer(tmp
     assert session.controller.pending.kind is UtteranceKind.FOLLOW_UP
     assert session.controller.pending.id != ack_id
     assert session.controller.memory.get("technical_terms").value == "webhooks"
-    await session.close()
-
-
-@pytest.mark.asyncio
-async def test_project_memory_correction_and_missing_detail_follow_up(tmp_path):
-    calls = []
-
-    async def infer(_kind, payload):
-        calls.append(payload)
-        if len(calls) == 1:
-            return {
-                "action": "follow_up",
-                "text": "What did you build yourself?",
-                "facts": [
-                    {"field": "project_name", "wording": "PR Guard"},
-                    {"field": "project_purpose", "wording": "posts risk reports as PR comments"},
-                ],
-                "project_status": "technical_example",
-            }
-        return {"action": "advance", "text": "", "facts": []}
-
-    session = InterviewSession(
-        SessionLog(tmp_path, "acceptance"), infer, lambda _: settle(), lambda _: None
-    )
-    session._remember_spoken_name("Mia", "My name is Mia")
-    await session.user_started()
-    await session.user_stopped("My name is spelled M A Y A.")
-    assert session.controller.preferred_name == "Maya"
-    deliver(session)
-    await question_one(session)
-    await session.user_started()
-    await session.user_stopped("I built PR Guard; it posts risk reports as PR comments.")
-    await settle()
-    assert session.controller.memory.get("project_purpose").value == (
-        "posts risk reports as PR comments"
-    )
-    assert session.controller.pending.text == "What did you build yourself?"
-    deliver(session)
-    await session.user_started()
-    await session.user_stopped("I said webhooks, not web books.")
-    assert session.controller.remaining_follow_ups == 0
-    deliver(session)
-    await session.user_started()
-    await session.user_stopped("I implemented the webhook handler and wrote its tests.")
-    await settle()
-    assert calls[1]["session_memory"]["candidate_name"] == {
-        "value": "Maya",
-        "confirmed": True,
-    }
-    assert calls[1]["session_memory"]["technical_terms"]["value"] == "webhooks"
-    assert calls[1]["correction_overlays"][-1] == {
-        "field": "technical_terms",
-        "superseded": "web books",
-        "current": "webhooks",
-    }
-    assert calls[1]["session_memory"]["project_purpose"]["value"] == (
-        "posts risk reports as PR comments"
-    )
-    assert session.controller.pending.text == "What was the hardest technical problem in it?"
-    assert session.controller.preferred_name == "Maya"
     await session.close()

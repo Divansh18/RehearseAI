@@ -5,28 +5,10 @@ from enum import Enum, auto
 
 from rehearse_ai.interview.memory import SessionMemory
 
-QUESTIONS = (
-    "Tell me about a project you're proud of.",
-    "What was the hardest technical problem in it?",
-    "How did you know it was working well?",
-    "What would you do differently now?",
-)
 GREETING = "Hey, I'm RehearseAI, your AI interview coach. How's your day going?"
 NAME_PROMPT = "What should I call you?"
 READINESS_PROMPT = "Ready to jump in?"
 READINESS_WAIT = "Just let me know when you're ready."
-READINESS_CLARIFICATION = (
-    "I didn't catch whether you're ready. Say 'start' when you are, or 'not yet' "
-    "if you need a moment."
-)
-PROJECT_INVITATION = (
-    "A coursework project, small script, or another technical task would work too. "
-    "Is there one you'd like to use?"
-)
-GENTLE_PROJECT_INVITATION = (
-    "I'm sorry it's feeling that way. We can pause, or use a small script, "
-    "coursework project, or another technical task. Would you like to try one?"
-)
 NO_PROJECT_SCOPE = (
     "This practice needs a technical example to build on. "
     "We can end here, or you can return when one comes to mind."
@@ -41,7 +23,6 @@ MAX_REPEATS_PER_PROMPT = 2
 # returns to the pending prompt rather than answering another detour.
 MAX_CONTROL_DETOURS = 3
 MAX_OPENING_REPEATS = 1
-MAX_PENDING_CHOICE_REPLIES = 2
 
 
 class Stage(Enum):
@@ -141,13 +122,12 @@ class InterviewController:
 
     def __init__(
         self,
-        questions: tuple[str, ...] | None = None,
+        questions: tuple[str, ...],
         *,
         probe_limits: tuple[int, ...] | None = None,
         required: tuple[bool, ...] | None = None,
     ) -> None:
-        self._questions = questions if questions is not None else QUESTIONS
-        self._assigned = questions is not None
+        self._questions = questions
         if not self._questions or len(self._questions) > 12:
             raise ValueError("Interview needs 1–12 questions")
         self._probe_limits = probe_limits or (MAX_FOLLOW_UPS_PER_QUESTION,) * len(self._questions)
@@ -178,19 +158,12 @@ class InterviewController:
         self.memory = SessionMemory()
         self._name_declined = False
         self._name_detour = False
-        self._name_repeats = 0
         self._detour_resume_prompt: Utterance | None = None
         self._return_after_detour = False
-        self._detours = [0] * len(self._questions)
-        self._choice_repeats = 0
-        self._no_project_choice_replies = 0
         self._opening_return_to_name = False
         self._opening_coach_replies = 0
-        self._project_established: bool | None = None
-        self._no_project_repeats = 0
         self._opening_repeats = {Stage.AWAITING_GREETING: 0, Stage.AWAITING_READINESS: 0}
         self._readiness_nudges = 0
-        self._readiness_clarifications = 0
         self._correction_return_stage: Stage | None = None
         self._correction_resume_utterance: Utterance | None = None
 
@@ -207,12 +180,10 @@ class InterviewController:
         return self._questions[self._question_index] if self._question_index >= 0 else None
 
     @property
-    def question_count(self) -> int:
-        return len(self._questions)
-
-    @property
-    def current_required(self) -> bool:
-        return self._question_index >= 0 and self._required[self._question_index]
+    def remaining_clarifications(self) -> int:
+        if self._question_index < 0:
+            return MAX_CLARIFICATIONS_PER_QUESTION
+        return MAX_CLARIFICATIONS_PER_QUESTION - self._clarifications[self._question_index]
 
     @property
     def pending(self) -> Utterance | None:
@@ -237,8 +208,7 @@ class InterviewController:
         self._require(Stage.AWAITING_PROPOSAL)
         target = question_number - 1
         if (
-            not self._assigned
-            or target <= self._question_index
+            target <= self._question_index
             or target >= len(self._questions)
             or self._covered_source_turns[target] is not None
             or source_turn < 1
@@ -273,8 +243,7 @@ class InterviewController:
         """
         for index in indices:
             if (
-                self._assigned
-                and index > self._question_index
+                index > self._question_index
                 and 0 <= index < len(self._questions)
                 and self._covered_source_turns[index] is None
                 and index not in self._delivered_questions
@@ -306,10 +275,6 @@ class InterviewController:
         }
 
     @property
-    def closing_remarks(self) -> tuple[str, ...]:
-        return tuple(self._closing_remarks)
-
-    @property
     def greeting_response(self) -> str:
         return self._greeting_response
 
@@ -317,18 +282,6 @@ class InterviewController:
     def preferred_name(self) -> str | None:
         fact = self.memory.get("candidate_name")
         return fact.value if fact else None
-
-    @property
-    def name_declined(self) -> bool:
-        return self._name_declined
-
-    @property
-    def project_established(self) -> bool | None:
-        return self._project_established
-
-    @property
-    def remaining_detours(self) -> int:
-        return 2 - self._detours[self._question_index] if self._question_index >= 0 else 2
 
     def remember_name(
         self,
@@ -352,9 +305,6 @@ class InterviewController:
             superseded_wording=superseded_wording,
         )
         self._name_declined = False
-
-    def decline_name(self) -> None:
-        self._name_declined = True
 
     def acknowledge_correction(
         self,
@@ -413,28 +363,13 @@ class InterviewController:
             return MAX_FOLLOW_UPS_PER_QUESTION
         return self._probe_limits[self._question_index] - self._follow_ups[self._question_index]
 
-    @property
-    def remaining_clarifications(self) -> int:
-        if self._question_index < 0:
-            return MAX_CLARIFICATIONS_PER_QUESTION
-        return MAX_CLARIFICATIONS_PER_QUESTION - self._clarifications[self._question_index]
-
-    def remaining_prompts_for(self, question_number: int) -> tuple[int, int]:
-        index = question_number - 1
-        return (
-            self._probe_limits[index] - self._follow_ups[index],
-            MAX_CLARIFICATIONS_PER_QUESTION - self._clarifications[index],
-        )
-
     def start(self, opening: str | None = None) -> Utterance:
         """Begin an interview. An assigned interview may open with a short greeting first."""
         self._require(Stage.NEW)
-        if self._assigned:
-            if opening:
-                self._opening_text = opening
-                return self._prepare(UtteranceKind.GREETING, opening, None)
-            return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
-        return self._prepare(UtteranceKind.GREETING, GREETING, None)
+        if opening:
+            self._opening_text = opening
+            return self._prepare(UtteranceKind.GREETING, opening, None)
+        return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
 
     def submit_greeting(self, text: str) -> Utterance | None:
         self._require(Stage.AWAITING_GREETING)
@@ -451,10 +386,7 @@ class InterviewController:
         Opening speech never becomes an answer: question one is not current until it has
         been delivered, so nothing said here can be stored against it or spend its probes.
         """
-        if not self._assigned or self._stage not in {
-            Stage.AWAITING_GREETING,
-            Stage.AWAITING_OPENING_ACK,
-        }:
+        if self._stage not in {Stage.AWAITING_GREETING, Stage.AWAITING_OPENING_ACK}:
             raise InvalidTransition("There is no assigned opening to complete")
         cleaned = text.strip()
         if not cleaned or len(cleaned) > 300:
@@ -484,40 +416,6 @@ class InterviewController:
         if continuation := text.strip():
             self._greeting_response = f"{self._greeting_response} {continuation}"
 
-    def prepare_readiness(
-        self,
-        acknowledgement: str,
-        greeting_readiness: Readiness = Readiness.UNCLEAR,
-        *,
-        ask_name: bool = False,
-    ) -> Utterance:
-        self._require(Stage.AWAITING_OPENING_ACK)
-        acknowledgement = acknowledgement.strip()
-        body = acknowledgement.rstrip(".! ")
-        if (
-            not body
-            or len(acknowledgement) > 120
-            or "\n" in acknowledgement
-            or "?" in acknowledgement
-            or "." in body
-            or "!" in body
-        ):
-            raise ValueError("Opening acknowledgement must be one short spoken line")
-        if acknowledgement[-1] not in ".!?":
-            acknowledgement += "."
-        if greeting_readiness is Readiness.READY:
-            return self._prepare(UtteranceKind.OPENING_ACK, acknowledgement, None)
-        if ask_name and not self.preferred_name and not self._name_declined:
-            return self._prepare(
-                UtteranceKind.NAME_PROMPT, f"{acknowledgement} {NAME_PROMPT}", None
-            )
-        if greeting_readiness is Readiness.DEFERRED:
-            self._readiness_nudges = 1
-            return self._prepare(
-                UtteranceKind.OPENING_WAIT, f"{acknowledgement} {READINESS_WAIT}", None
-            )
-        return self._prepare(UtteranceKind.READINESS, f"{acknowledgement} {READINESS_PROMPT}", None)
-
     def submit_name(self, name: str | None, readiness: Readiness) -> Utterance:
         self._require(Stage.AWAITING_NAME)
         if name:
@@ -542,49 +440,11 @@ class InterviewController:
             )
         return self._prepare(UtteranceKind.READINESS, f"{acknowledgement} {READINESS_PROMPT}", None)
 
-    def answer_opening_question(self, reply: str, name: str | None = None) -> Utterance:
-        if self._stage not in {Stage.AWAITING_NAME, Stage.AWAITING_READINESS}:
-            raise InvalidTransition("Opening question is no longer pending")
-        if not reply.strip() or len(reply) > 120 or "?" in reply or "\n" in reply:
-            raise ValueError("Coach reply must be a short statement")
-        self._opening_return_to_name = self._stage is Stage.AWAITING_NAME and name is None
-        self._opening_coach_replies += 1
-        if name:
-            self.remember_name(name)
-            reply = f"Nice to meet you, {name}. {reply.strip()}"
-        return self._prepare(UtteranceKind.OPENING_COACH_REPLY, reply.strip(), None)
-
     def resume_opening_question(self) -> Utterance:
         self._require(Stage.AWAITING_OPENING_RETURN)
         if self._opening_return_to_name and self._opening_coach_replies < 2:
             return self._prepare(UtteranceKind.NAME_PROMPT, NAME_PROMPT, None)
         return self._prepare(UtteranceKind.READINESS, READINESS_PROMPT, None)
-
-    def start_after_opening_question(self) -> Utterance:
-        self._require(Stage.AWAITING_OPENING_RETURN)
-        return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
-
-    def retry_name_prompt(self) -> Utterance:
-        self._require(Stage.AWAITING_NAME)
-        self._name_repeats += 1
-        if self._name_repeats > 1:
-            return self.submit_name(None, Readiness.UNCLEAR)
-        return self._prepare(
-            UtteranceKind.NAME_PROMPT,
-            NAME_PROMPT,
-            self._question_index if self._name_detour else None,
-        )
-
-    def clarify_name(self) -> Utterance:
-        self._require(Stage.AWAITING_NAME)
-        self._name_repeats += 1
-        if self._name_repeats > 1:
-            return self.submit_name(None, Readiness.UNCLEAR)
-        return self._prepare(
-            UtteranceKind.NAME_PROMPT,
-            "Sorry, I didn't catch your name. Could you say it once more, or spell it?",
-            self._question_index if self._name_detour else None,
-        )
 
     def acknowledge_spelled_name(self, name: str) -> Utterance:
         self._require(Stage.AWAITING_READINESS)
@@ -594,140 +454,9 @@ class InterviewController:
             None,
         )
 
-    def skip_name_for_start(self) -> Utterance:
-        self._require(Stage.AWAITING_NAME)
-        self._name_declined = True
-        if self._name_detour:
-            self._name_detour = False
-            return self._prepare(
-                UtteranceKind.DETOUR_ACK,
-                "Okay. Would you like to continue or finish?",
-                self._question_index,
-            )
-        return self._prepare(UtteranceKind.NAME_ACK, "Okay, let's begin.", None)
-
-    def start_name_detour(self, resume_prompt: Utterance | None = None) -> Utterance:
-        if self._stage not in {Stage.AWAITING_ANSWER, Stage.AWAITING_PROPOSAL}:
-            raise InvalidTransition(f"Cannot start a detour from {self._stage.name}")
-        index = self._question_index
-        self._detours[index] = min(self._detours[index] + 1, 2)
-        self._detour_resume_prompt = resume_prompt
-        if self.preferred_name:
-            self._name_detour = False
-            return self._prepare(
-                UtteranceKind.DETOUR_ACK,
-                f"I have you as {self.preferred_name}. Would you like to continue or finish?",
-                index,
-            )
-        if self._name_declined:
-            self._name_detour = False
-            return self._prepare(
-                UtteranceKind.DETOUR_ACK,
-                "No need to share a name. Would you like to continue or finish?",
-                index,
-            )
-        self._name_detour = True
-        return self._prepare(
-            UtteranceKind.NAME_PROMPT,
-            "You're right, I didn't ask. What should I call you?",
-            index,
-        )
-
-    def start_general_detour(
-        self,
-        text: str,
-        resume_prompt: Utterance | None = None,
-        *,
-        kind: UtteranceKind = UtteranceKind.DETOUR_ACK,
-    ) -> Utterance:
-        self._require(Stage.AWAITING_PROPOSAL)
-        if kind not in {
-            UtteranceKind.DETOUR_ACK,
-            UtteranceKind.PROVISIONAL_FEEDBACK,
-            UtteranceKind.TOPIC_BOUNDARY,
-        }:
-            raise ValueError("Invalid conversational response kind")
-        exhausted = self._detours[self._question_index] >= 2
-        self._detours[self._question_index] = min(self._detours[self._question_index] + 1, 2)
-        self._detour_resume_prompt = resume_prompt
-        self._return_after_detour = kind is UtteranceKind.DETOUR_ACK
-        if exhausted and kind is UtteranceKind.TOPIC_BOUNDARY:
-            text = "I can only help with interview practice here. Continue or finish?"
-        return self._prepare(kind, text, self._question_index)
-
-    def start_interrupted_detour(
-        self, text: str, *, kind: UtteranceKind = UtteranceKind.DETOUR_ACK
-    ) -> Utterance:
-        self._require(Stage.DELIVERING)
-        if self._interrupted is None:
-            raise InvalidTransition("There is no interrupted project prompt")
-        if kind not in {
-            UtteranceKind.DETOUR_ACK,
-            UtteranceKind.PROVISIONAL_FEEDBACK,
-            UtteranceKind.TOPIC_BOUNDARY,
-        }:
-            raise ValueError("Invalid conversational response kind")
-        index = self._index_for(self._interrupted)
-        self._detour_resume_prompt = self._interrupted
-        self._return_after_detour = kind is UtteranceKind.DETOUR_ACK
-        self._interrupted = None
-        if index is not None:
-            self._detours[index] = min(self._detours[index] + 1, 2)
-        return self._prepare(kind, text, index)
-
-    def continue_interview(self) -> Utterance | None:
-        self._require(Stage.AWAITING_CONTINUE_CHOICE)
-        prompt = self._detour_resume_prompt
-        self._detour_resume_prompt = None
-        self._return_after_detour = False
-        self._choice_repeats = 0
-        if prompt is not None:
-            return self._prepare(UtteranceKind.DETOUR_RESUME, prompt.text, self._index_for(prompt))
-        if self._question_index >= 0 and self._answers[self._question_index]:
-            self._stage = Stage.AWAITING_PROPOSAL
-            return None
-        return self._prepare(
-            UtteranceKind.DETOUR_RESUME, self._questions[self._question_index], self._question_index
-        )
-
-    def repeat_continuation_choice(
-        self, *, off_topic: bool = False, presence: bool = False, explain: bool = False
-    ) -> Utterance | None:
-        self._require(Stage.AWAITING_CONTINUE_CHOICE)
-        if self._choice_repeats >= MAX_PENDING_CHOICE_REPLIES:
-            return None
-        self._choice_repeats += 1
-        text = (
-            "I'm here. Would you like to continue the interview or finish?"
-            if presence
-            else "Continue with the project question I asked, or finish here?"
-            if explain
-            else "This session is for interview practice. Continue with your project or finish?"
-            if off_topic
-            else "Would you like to continue the interview or finish here?"
-        )
-        return self._prepare(UtteranceKind.TOPIC_BOUNDARY, text, self._question_index)
-
-    def reply_to_no_project_choice(self, *, presence: bool = False) -> Utterance | None:
-        self._require(Stage.AWAITING_NO_PROJECT_CHOICE)
-        if self._no_project_choice_replies >= MAX_PENDING_CHOICE_REPLIES:
-            return None
-        self._no_project_choice_replies += 1
-        text = (
-            "I'm here. Would you like to try a technical example or finish?"
-            if presence
-            else "This practice needs a technical example. Would you like to try one or finish?"
-        )
-        return self._prepare(UtteranceKind.NO_PROJECT_SCOPE, text, 0)
-
     def restore_answers(self, answers: tuple[str, ...]) -> None:
         self._require(Stage.AWAITING_PROPOSAL)
         self._answers[self._question_index] = list(answers)
-
-    def add_detour_fragment(self, text: str) -> None:
-        self._require(Stage.AWAITING_PROPOSAL)
-        if fragment := text.strip():
-            self._answers[self._question_index].append(fragment)
 
     def resume_detour(self) -> Utterance | None:
         self._require(Stage.AWAITING_DETOUR_RETURN)
@@ -750,32 +479,9 @@ class InterviewController:
             UtteranceKind.DETOUR_RESUME, self._questions[self._question_index], self._question_index
         )
 
-    def restate_project_prompt(self, prompt: Utterance) -> Utterance:
-        """Restate a pending question without treating a bare control reply as an answer."""
-        self._require(Stage.AWAITING_ANSWER)
-        if prompt.question_number != self.current_question_number:
-            raise InvalidTransition("Project prompt belongs to another question")
-        return self._prepare(UtteranceKind.DETOUR_RESUME, prompt.text, self._question_index)
-
     def begin_question_one(self) -> Utterance:
         self._require(Stage.AWAITING_QUESTION_START)
         return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
-
-    def submit_readiness(self, ready: bool) -> Utterance | None:
-        self._require(Stage.AWAITING_READINESS)
-        if ready:
-            return self._prepare(UtteranceKind.QUESTION, self._questions[0], 0)
-        if self._readiness_nudges >= 1:
-            return None
-        self._readiness_nudges += 1
-        return self._prepare(UtteranceKind.OPENING_WAIT, READINESS_WAIT, None)
-
-    def clarify_readiness(self) -> Utterance | None:
-        self._require(Stage.AWAITING_READINESS)
-        if self._readiness_clarifications >= 1:
-            return None
-        self._readiness_clarifications += 1
-        return self._prepare(UtteranceKind.OPENING_CLARIFICATION, READINESS_CLARIFICATION, None)
 
     def request_opening_repeat(self) -> Utterance:
         phase = (
@@ -816,71 +522,6 @@ class InterviewController:
         )
         return self._prepare(UtteranceKind.REPEAT, text, index)
 
-    def explain_current_question(self, text: str) -> Utterance:
-        """Answer an explicit request to clarify the question without a project probe."""
-        if self._stage not in {Stage.AWAITING_ANSWER, Stage.AWAITING_PROPOSAL}:
-            raise InvalidTransition("There is no project question to explain")
-        index = self._question_index
-        if self._clarifications[index] >= MAX_CLARIFICATIONS_PER_QUESTION:
-            raise LimitReached("Question explanation limit reached")
-        self._clarifications[index] += 1
-        return self._prepare(UtteranceKind.CLARIFICATION, text, index)
-
-    def set_project_status(self, status: str) -> None:
-        if status == "technical_example":
-            self._project_established = True
-        elif status in {"no_example", "nontechnical"} and self._question_index == 0:
-            self._project_established = False
-        elif (
-            status == "unclear" and self._question_index == 0 and self._project_established is None
-        ):
-            self._project_established = False
-
-    def offer_project_example(self, *, gentle: bool = False) -> Utterance:
-        if self._stage not in {Stage.AWAITING_PROPOSAL, Stage.AWAITING_ANSWER}:
-            raise InvalidTransition("Project recovery is not pending")
-        if self._question_index != 0 or self._project_established is True:
-            raise InvalidTransition("Project recovery is not applicable")
-        self._project_established = False
-        return self._prepare(
-            UtteranceKind.NO_PROJECT_INVITE,
-            GENTLE_PROJECT_INVITATION if gentle else PROJECT_INVITATION,
-            0,
-        )
-
-    def explain_no_project_scope(self) -> Utterance:
-        self._require(Stage.AWAITING_NO_PROJECT_EXAMPLE)
-        return self._prepare(UtteranceKind.NO_PROJECT_SCOPE, NO_PROJECT_SCOPE, 0)
-
-    def repeat_no_project_prompt(self) -> Utterance:
-        if self._stage not in {
-            Stage.AWAITING_NO_PROJECT_EXAMPLE,
-            Stage.AWAITING_NO_PROJECT_CHOICE,
-        }:
-            raise InvalidTransition("No project recovery prompt is active")
-        if self._no_project_repeats >= 1:
-            raise LimitReached("No-project repeat limit reached")
-        self._no_project_repeats += 1
-        kind = (
-            UtteranceKind.NO_PROJECT_INVITE
-            if self._stage is Stage.AWAITING_NO_PROJECT_EXAMPLE
-            else UtteranceKind.NO_PROJECT_SCOPE
-        )
-        text = PROJECT_INVITATION if kind is UtteranceKind.NO_PROJECT_INVITE else NO_PROJECT_SCOPE
-        return self._prepare(kind, text, 0)
-
-    def accept_project_example(self, text: str) -> None:
-        if self._stage not in {
-            Stage.AWAITING_NO_PROJECT_EXAMPLE,
-            Stage.AWAITING_NO_PROJECT_CHOICE,
-        }:
-            raise InvalidTransition("No project example was requested")
-        if not text.strip():
-            raise ValueError("Project example cannot be empty")
-        self._project_established = True
-        self._answers[0].append(text.strip())
-        self._stage = Stage.AWAITING_PROPOSAL
-
     def propose(self, kind: ReplyKind, text: str | None = None) -> Utterance | None:
         """Accept a bounded LLM proposal; Python selects the next question."""
         self._require(Stage.AWAITING_PROPOSAL)
@@ -890,8 +531,6 @@ class InterviewController:
         if kind is ReplyKind.ADVANCE:
             if text is not None:
                 raise ValueError("ADVANCE cannot supply speech text")
-            if not self._assigned and index == 0 and self._project_established is False:
-                raise InvalidTransition("A technical example is needed before dependent questions")
             next_index = self._next_open_index(index + 1)
             if next_index == len(self._questions):
                 self._stage = Stage.AWAITING_FEEDBACK
@@ -915,7 +554,7 @@ class InterviewController:
 
     def prepare_closing(self, text: str) -> Utterance:
         self._require(Stage.AWAITING_FEEDBACK)
-        if not self._assigned or not text.strip() or len(text) > 500:
+        if not text.strip() or len(text) > 500:
             raise ValueError("Assigned closing must be short and nonempty")
         return self._prepare(UtteranceKind.CLOSING, text.strip(), None)
 
@@ -942,8 +581,7 @@ class InterviewController:
         """
         prompt = self._pending_prompt
         if (
-            not self._assigned
-            or prompt is None
+            prompt is None
             or prompt.question_number is None
             or self._stage not in {Stage.AWAITING_ANSWER, Stage.AWAITING_PROPOSAL, Stage.DELIVERING}
         ):
@@ -969,7 +607,7 @@ class InterviewController:
         cannot be lost and the next answer is attributed to the right question.
         """
         prompt = self._pending_prompt
-        if not self._assigned or prompt is None or prompt.question_number is None:
+        if prompt is None or prompt.question_number is None:
             raise InvalidTransition("No assigned interview question is pending")
         self._settle_interrupted()
         if not self._prompt_delivered:
@@ -997,30 +635,6 @@ class InterviewController:
             raise InvalidTransition("No question is in play")
         self._gaps.add(self._question_index)
 
-    def prepare_information(self, text: str, *, repeat_unheard: bool = False) -> Utterance:
-        if not self._assigned or self._stage not in {
-            Stage.AWAITING_ANSWER,
-            Stage.AWAITING_PROPOSAL,
-            Stage.DELIVERING,
-        }:
-            raise InvalidTransition("No assigned interview question is pending")
-        interrupted = self._interrupted
-        if interrupted and interrupted.question_number is not None:
-            if interrupted.kind is UtteranceKind.QUESTION:
-                self._question_index = interrupted.question_number - 1
-            if repeat_unheard:
-                text = f"{text.strip()} {interrupted.text}"
-        self._interrupted = None
-        return self._prepare(UtteranceKind.INFORMATION, text.strip(), self._question_index)
-
-    def prepare_feedback(self, text: str) -> Utterance:
-        """Queue validated feedback supplied by the LLM adapter."""
-        self._require(Stage.AWAITING_FEEDBACK)
-        lines = text.splitlines()
-        if not 2 <= len(lines) <= 3 or any(not line.strip() for line in lines):
-            raise ValueError("Closing feedback must have 2 or 3 nonempty lines")
-        return self._prepare(UtteranceKind.FEEDBACK, text, None)
-
     def end_early(self) -> bool:
         """Stop all question progression, including an undelivered question."""
         if self._stage in {Stage.COMPLETE, Stage.ENDED_EARLY, Stage.EARLY_CLOSING}:
@@ -1040,18 +654,8 @@ class InterviewController:
     def skip_current(self) -> Utterance | None:
         """Advance on an explicit skip without recording a fabricated answer."""
         self._require(Stage.AWAITING_ANSWER)
-        if (
-            self._assigned
-            and self._required[self._question_index]
-            and not self._answers[self._question_index]
-        ):
+        if self._required[self._question_index] and not self._answers[self._question_index]:
             raise InvalidTransition("Required question must be addressed")
-        if (
-            not self._assigned
-            and self._question_index == 0
-            and self._project_established is not True
-        ):
-            raise InvalidTransition("Cannot skip to a dependent question without a project")
         next_index = self._next_open_index(self._question_index + 1)
         if next_index >= len(self._questions):
             self._stage = Stage.AWAITING_FEEDBACK
@@ -1253,12 +857,6 @@ class InterviewController:
         if continuation:
             latest = self._answers[self._question_index]
             latest[-1] = f"{latest[-1]} {continuation}"
-
-    def add_closing_remarks(self, text: str) -> None:
-        """Retain speech that arrives while closing feedback is being planned."""
-        self._require(Stage.AWAITING_FEEDBACK)
-        if remark := text.strip():
-            self._closing_remarks.append(remark)
 
     def _index_for(self, utterance: Utterance) -> int | None:
         return utterance.question_number - 1 if utterance.question_number is not None else None

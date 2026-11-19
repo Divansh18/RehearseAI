@@ -1,7 +1,6 @@
 import pytest
 
 from rehearse_ai.interview.controller import (
-    QUESTIONS,
     InterviewController,
     InvalidTransition,
     LimitReached,
@@ -11,6 +10,13 @@ from rehearse_ai.interview.controller import (
     UtteranceKind,
 )
 
+QUESTIONS = (
+    "Tell me about a project you're proud of.",
+    "What was the hardest technical problem in it?",
+    "How did you know it was working well?",
+    "What would you do differently now?",
+)
+
 
 def deliver(controller: InterviewController, utterance: Utterance) -> None:
     assert controller.pending == utterance
@@ -18,10 +24,8 @@ def deliver(controller: InterviewController, utterance: Utterance) -> None:
 
 
 def begin_questions(controller: InterviewController) -> Utterance:
-    deliver(controller, controller.start())
-    controller.submit_greeting("I'm doing well")
-    deliver(controller, controller.prepare_readiness("Good to hear."))
-    return controller.submit_readiness(True)
+    """An interview with no opening starts directly on question one."""
+    return controller.start()
 
 
 def start_and_answer(
@@ -31,7 +35,7 @@ def start_and_answer(
     assert controller.submit_answer(answer) is None
 
 
-def reach_feedback(controller: InterviewController) -> None:
+def reach_closing_stage(controller: InterviewController) -> None:
     question = begin_questions(controller)
     for index, expected in enumerate(QUESTIONS):
         assert question.text == expected
@@ -47,22 +51,20 @@ def reach_feedback(controller: InterviewController) -> None:
     assert controller.stage is Stage.AWAITING_FEEDBACK
 
 
-def test_four_questions_and_closing_feedback_require_delivery() -> None:
-    controller = InterviewController()
-    reach_feedback(controller)
+def test_four_questions_and_closing_require_delivery() -> None:
+    controller = InterviewController(QUESTIONS)
+    reach_closing_stage(controller)
     assert controller.answers == (("Answer 1",), ("Answer 2",), ("Answer 3",), ("Answer 4",))
 
-    feedback = controller.prepare_feedback(
-        "You explained the design clearly.\nNext time, quantify the result."
-    )
-    assert feedback.kind is UtteranceKind.FEEDBACK
+    feedback = controller.prepare_closing("That concludes the interview. Thank you for your time.")
+    assert feedback.kind is UtteranceKind.CLOSING
     assert controller.stage is Stage.DELIVERING
     deliver(controller, feedback)
     assert controller.stage is Stage.COMPLETE
 
 
 def test_follow_up_and_nudge_share_one_slot() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     start_and_answer(controller, "I built a compiler")
     follow_up = controller.propose(ReplyKind.FOLLOW_UP, "What trade-off mattered most?")
     assert follow_up.kind is UtteranceKind.FOLLOW_UP
@@ -79,7 +81,7 @@ def test_follow_up_and_nudge_share_one_slot() -> None:
 
 
 def test_model_clarification_spends_project_probe_not_candidate_repeat_slot() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     start_and_answer(controller)
     clarification = controller.propose(ReplyKind.CLARIFICATION, "Which part did you own?")
     deliver(controller, clarification)
@@ -88,7 +90,7 @@ def test_model_clarification_spends_project_probe_not_candidate_repeat_slot() ->
         controller.propose(ReplyKind.CLARIFICATION, "Can you clarify again?")
     assert controller.propose(ReplyKind.ADVANCE).text == QUESTIONS[1]
 
-    another = InterviewController()
+    another = InterviewController(QUESTIONS)
     deliver(another, begin_questions(another))
     repeated = another.request_repeat()
     assert repeated.text == QUESTIONS[0]
@@ -101,7 +103,7 @@ def test_model_clarification_spends_project_probe_not_candidate_repeat_slot() ->
 
 
 def test_follow_up_cannot_be_relabelled_as_model_clarification() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     start_and_answer(controller, "I built a parser")
     follow_up = controller.propose(ReplyKind.FOLLOW_UP, "What did it parse?")
     deliver(controller, follow_up)
@@ -110,13 +112,10 @@ def test_follow_up_cannot_be_relabelled_as_model_clarification() -> None:
         controller.propose(ReplyKind.CLARIFICATION, "Which source files?")
     assert controller.remaining_follow_ups == 0
     assert controller.remaining_clarifications == 1
-    explanation = controller.explain_current_question("I meant the parser you described.")
-    assert explanation.kind is UtteranceKind.CLARIFICATION
-    assert controller.remaining_clarifications == 0
 
 
 def test_empty_answer_and_repeat_request_are_bounded() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     deliver(controller, begin_questions(controller))
     repeated = controller.submit_answer("  ")
     assert repeated.kind is UtteranceKind.REPEAT
@@ -133,7 +132,7 @@ def test_empty_answer_and_repeat_request_are_bounded() -> None:
 
 
 def test_interrupted_main_question_needs_new_delivery() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     original = begin_questions(controller)
     assert controller.current_question is None
     assert controller.interrupt(original.id)
@@ -152,7 +151,7 @@ def test_interrupted_main_question_needs_new_delivery() -> None:
 
 
 def test_interrupted_follow_up_preserves_slot_and_answer() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     start_and_answer(controller, "I built a compiler")
     original = controller.propose(ReplyKind.NUDGE, "What did you personally build?")
     assert controller.interrupt(original.id)
@@ -166,7 +165,7 @@ def test_interrupted_follow_up_preserves_slot_and_answer() -> None:
 
 
 def test_interrupted_transition_does_not_skip_next_question() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     start_and_answer(controller)
     next_question = controller.propose(ReplyKind.ADVANCE)
     assert controller.current_question_number == 1
@@ -180,22 +179,20 @@ def test_interrupted_transition_does_not_skip_next_question() -> None:
 
 
 def test_interrupted_closing_response_does_not_complete() -> None:
-    controller = InterviewController()
-    reach_feedback(controller)
-    feedback = controller.prepare_feedback(
-        "Strong explanation.\nGive a clearer impact metric next time."
-    )
+    controller = InterviewController(QUESTIONS)
+    reach_closing_stage(controller)
+    feedback = controller.prepare_closing("That concludes the interview. Thank you for your time.")
     assert controller.interrupt(feedback.id)
     assert controller.stage is Stage.DELIVERING
     assert not controller.delivery_finished(feedback.id)
     retry = controller.retry_interrupted()
-    assert retry.kind is UtteranceKind.FEEDBACK
+    assert retry.kind is UtteranceKind.CLOSING
     deliver(controller, retry)
     assert controller.stage is Stage.COMPLETE
 
 
 def test_substantive_barge_in_resolves_interrupted_main_question() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     first = begin_questions(controller)
     assert controller.interrupt(first.id)
     assert controller.accept_barge_in_answer("I built a parser")
@@ -206,7 +203,7 @@ def test_substantive_barge_in_resolves_interrupted_main_question() -> None:
 
 
 def test_interrupted_follow_up_accepts_answer_without_spending_another_slot() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     start_and_answer(controller)
     follow_up = controller.propose(ReplyKind.FOLLOW_UP, "What was your role?")
     assert controller.interrupt(follow_up.id)
@@ -216,19 +213,18 @@ def test_interrupted_follow_up_accepts_answer_without_spending_another_slot() ->
         controller.propose(ReplyKind.NUDGE, "Say more")
 
 
-def test_interrupted_feedback_can_be_replanned_but_not_marked_complete() -> None:
-    controller = InterviewController()
-    reach_feedback(controller)
-    feedback = controller.prepare_feedback("Clear story.\nAdd a result next time.")
+def test_interrupted_closing_can_be_replanned_but_not_marked_complete() -> None:
+    controller = InterviewController(QUESTIONS)
+    reach_closing_stage(controller)
+    feedback = controller.prepare_closing("That concludes the interview. Thank you for your time.")
     assert controller.interrupt(feedback.id)
     assert controller.accept_barge_in_answer("Thank you")
-    assert controller.closing_remarks == ("Thank you",)
     assert controller.stage is Stage.AWAITING_FEEDBACK
     assert not controller.delivery_finished(feedback.id)
 
 
 def test_duplicate_and_stale_delivery_and_interruption_events_are_ignored() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     first = begin_questions(controller)
     assert not controller.delivery_finished(first.id + 100)
     deliver(controller, first)
@@ -244,9 +240,12 @@ def test_duplicate_and_stale_delivery_and_interruption_events_are_ignored() -> N
 
 
 def test_completed_interview_rejects_progression() -> None:
-    controller = InterviewController()
-    reach_feedback(controller)
-    deliver(controller, controller.prepare_feedback("Good depth.\nExplain the trade-offs sooner."))
+    controller = InterviewController(QUESTIONS)
+    reach_closing_stage(controller)
+    deliver(
+        controller,
+        controller.prepare_closing("That concludes the interview. Thank you for your time."),
+    )
     with pytest.raises(InvalidTransition):
         controller.start()
     with pytest.raises(InvalidTransition):
@@ -256,7 +255,7 @@ def test_completed_interview_rejects_progression() -> None:
     with pytest.raises(InvalidTransition):
         controller.propose(ReplyKind.ADVANCE)
     with pytest.raises(InvalidTransition):
-        controller.prepare_feedback("More.\nFeedback.")
+        controller.prepare_closing("That concludes the interview. Thank you for your time.")
     with pytest.raises(InvalidTransition):
         controller.retry_interrupted()
     assert not controller.delivery_finished(999)
@@ -264,7 +263,7 @@ def test_completed_interview_rejects_progression() -> None:
 
 
 def test_invalid_proposals_do_not_change_state() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     start_and_answer(controller)
     with pytest.raises(ValueError):
         controller.propose(ReplyKind.FOLLOW_UP, " ")
@@ -278,7 +277,7 @@ def test_invalid_proposals_do_not_change_state() -> None:
 
 
 def test_early_end_is_distinct_and_blocks_further_questions() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     first = controller.start()
     assert controller.end_early()
     assert not controller.delivery_finished(first.id)
@@ -293,7 +292,7 @@ def test_early_end_is_distinct_and_blocks_further_questions() -> None:
 
 
 def test_skip_interrupted_question_is_explicit_and_does_not_record_answer() -> None:
-    controller = InterviewController()
+    controller = InterviewController(QUESTIONS)
     first = begin_questions(controller)
     assert controller.interrupt(first.id)
     with pytest.raises(InvalidTransition):
@@ -301,15 +300,13 @@ def test_skip_interrupted_question_is_explicit_and_does_not_record_answer() -> N
     assert controller.answers == ((), (), (), ())
     assert controller.current_question_number == 1
     assert controller.stage is Stage.AWAITING_ANSWER
-    invitation = controller.offer_project_example()
-    assert invitation.kind is UtteranceKind.NO_PROJECT_INVITE
 
 
-def test_feedback_must_be_two_or_three_actual_lines() -> None:
-    controller = InterviewController()
-    reach_feedback(controller)
+def test_closing_must_be_short_nonempty_text() -> None:
+    controller = InterviewController(QUESTIONS)
+    reach_closing_stage(controller)
     with pytest.raises(ValueError):
-        controller.prepare_feedback("A generic compliment")
+        controller.prepare_closing("   ")
     with pytest.raises(ValueError):
-        controller.prepare_feedback("First line\n\nThird line")
+        controller.prepare_closing("x" * 501)
     assert controller.stage is Stage.AWAITING_FEEDBACK

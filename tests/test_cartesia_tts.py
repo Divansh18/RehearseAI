@@ -5,6 +5,7 @@ import json
 
 import pytest
 from pipecat.processors.frame_processor import FrameDirection
+from support import plan_dict
 from websockets.protocol import State
 
 from rehearse_ai.interview.session import InterviewSession
@@ -59,7 +60,7 @@ async def test_tts_request_binds_context_before_audio_started_frame(tmp_path):
         pass
 
     log = SessionLog(tmp_path, "tts-correlation")
-    session = InterviewSession(log, infer, speak, lambda _: None)
+    session = InterviewSession(log, infer, speak, lambda _: None, interview_plan=plan_dict())
     tts = ObservedCartesiaTTSService(session, api_key="test-key")
     await session.start()
     utterance_id = session.controller.pending.id
