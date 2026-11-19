@@ -32,12 +32,12 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
-from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy, VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_processor import UserTurnProcessor
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from rehearse_ai.config import Settings
+from rehearse_ai.interruption import ConfirmedSpeechStartStrategy
 from rehearse_ai.interview import Stage, Utterance
 from rehearse_ai.prompts import load_prompt
 from rehearse_ai.session import InterviewSession
@@ -436,6 +436,8 @@ class LiveSession:
             endpointing="provider_default",
             vad_stop_secs=settings.vad_stop_secs,
             turn_pause_secs=settings.turn_pause_secs,
+            interrupt_confirm_secs=settings.interrupt_confirm_secs,
+            interrupt_transcript_grace_secs=settings.interrupt_transcript_grace_secs,
         )
         transport = SmallWebRTCTransport(
             webrtc_connection=connection,
@@ -461,6 +463,14 @@ class LiveSession:
             self_reported_name=self_reported_name,
         )
         input_adapter.session = self.session
+        start_strategy = ConfirmedSpeechStartStrategy(
+            confirm_secs=settings.interrupt_confirm_secs,
+            transcript_grace_secs=min(
+                settings.interrupt_transcript_grace_secs,
+                max(0.0, settings.turn_pause_secs - 0.1),
+            ),
+            observer=lambda name, **details: self.session.turn_signal(name, **details),
+        )
         audio_observer.session = self.session
         delivery.session = self.session
         self.pipeline = Pipeline(
@@ -485,7 +495,7 @@ class LiveSession:
                 UserTurnProcessor(
                     user_turn_stop_timeout=30.0,
                     user_turn_strategies=UserTurnStrategies(
-                        start=[VADUserTurnStartStrategy(), TranscriptionUserTurnStartStrategy()],
+                        start=[start_strategy],
                         stop=[
                             SpeechTimeoutUserTurnStopStrategy(
                                 user_speech_timeout=settings.turn_pause_secs

@@ -42,3 +42,13 @@ Use a real laptop/phone with a real camera and screen share. Do not rely on synt
 5. End immediately after Begin (before the first question) and check the PDF still builds, stating no image was saved if none was captured.
 6. In Safari and a phone browser, check the image or the labelled camera-only fallback; the interview must never stall.
 7. Signed in as the candidate, confirm there is no way to download the PDF or image.
+
+## Home-noise microphone test (false interruptions)
+
+Use headphones first, then speakers. Start an interview and let the interviewer begin a long question.
+1. **Brief noise:** while it is speaking, tap the desk, clear your throat once, close a door, or knock a cup. Expect the interviewer to keep talking and the page to stay on *Speaking*.
+2. **Genuine short interruption:** say "stop" or "wait". Expect it to stop within about a second and the page to show *Listening*.
+3. **Sustained speech:** talk over it for a few seconds. It should stop and your whole answer should be heard.
+4. **Quiet speech:** say a short answer softly. It should still be heard.
+5. **Sustained noise:** run a fan, a vacuum or a TV. Expect this may still interrupt; note it. It is a known limit, as is someone else speaking nearby: the system cannot tell speakers apart.
+6. Afterwards, check the session log for `interruption_rejected` (rejected bursts, with `tentative_ms`) and `interruption_committed` (with `source` and `waited_ms`), and confirm the question that was playing was not skipped or lost after a rejected burst. If real speech feels slow, lower `REHEARSE_INTERRUPT_CONFIRM_SECS` (0 restores the old behaviour); if noise still gets through, raise it.

@@ -24,3 +24,4 @@ recordings/
 *.webm
 .DS_Store
 private_documents/
+!tests/audio/*.wav

@@ -75,6 +75,8 @@ class Settings:
     vad_start_secs: float = 0.2
     vad_stop_secs: float = 0.35
     turn_pause_secs: float = 1.1
+    interrupt_confirm_secs: float = 0.5
+    interrupt_transcript_grace_secs: float = 0.5
     auth: AuthConfig = field(default_factory=AuthConfig)
 
     @classmethod
@@ -254,6 +256,12 @@ class Settings:
             vad_start_secs=number("REHEARSE_VAD_START_SECS", "0.2", low=0.05, high=2.0),
             vad_stop_secs=number("REHEARSE_VAD_STOP_SECS", "0.35", low=0.1, high=2.0),
             turn_pause_secs=number("REHEARSE_TURN_PAUSE_SECS", "1.1", low=0.2, high=5.0),
+            interrupt_confirm_secs=number(
+                "REHEARSE_INTERRUPT_CONFIRM_SECS", "0.5", low=0.0, high=2.0
+            ),
+            interrupt_transcript_grace_secs=number(
+                "REHEARSE_INTERRUPT_TRANSCRIPT_GRACE_SECS", "0.5", low=0.0, high=1.0
+            ),
             auth=AuthConfig(
                 database_url=database_url,
                 secret=secret,
