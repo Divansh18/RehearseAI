@@ -1,0 +1,25 @@
+{
+  // Explorer only: hides generated output and private runtime data so the tree shows source, tests,
+  // docs, configuration examples and commands. Nothing is deleted or moved; .env stays visible.
+  "files.exclude": {
+    // Python and tool caches, virtual environments, build output
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/*.egg-info": true,
+    ".venv": true,
+    "backend/.venv": true,
+    "build": true,
+    "dist": true,
+    "backend/build": true,
+    "backend/dist": true,
+
+    // Private runtime data (git-ignored; resolved relative to the repository root)
+    "sessions": true,
+    "private_documents": true,
+    "private_pdfs": true,
+    "private_snapshots": true,
+    "recordings": true,
+    "output": true
+  }
+}
