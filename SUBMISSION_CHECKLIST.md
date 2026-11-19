@@ -1,5 +1,7 @@
 # Submission checklist
 
+> **Historical.** File paths in this checklist describe the prototype as it was submitted. The code has since moved into capability packages and the practice interview described here was removed; see [ARCHITECTURE.md](ARCHITECTURE.md) for current locations.
+
 The assignment brief is in the local `takehome-voice-agent.zip`. This checklist records repository state; it does not mark the take-home submission complete.
 
 ## Ready
