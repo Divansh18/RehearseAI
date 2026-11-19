@@ -49,7 +49,7 @@ def live(monkeypatch):
     class FakeLive:
         def __init__(self, connection, _settings, **kwargs):
             self.connection = connection
-            self.candidate_id = kwargs["candidate_id"]
+            self.assignment_id = kwargs["assignment_id"]
             self.log = SimpleNamespace(session_id=kwargs["session_id"])
             self.done = asyncio.Event()
             captured.append(kwargs)
@@ -64,8 +64,8 @@ def live(monkeypatch):
         await callback(SimpleNamespace())
         return {"sdp": "synthetic-answer", "type": "answer"}
 
-    monkeypatch.setattr("rehearse_ai.server.LiveSession", FakeLive)
-    monkeypatch.setattr("rehearse_ai.server.SmallWebRTCRequestHandler.handle_web_request", accept)
+    monkeypatch.setattr("rehearse_ai.server.routes.attempts.LiveSession", FakeLive)
+    monkeypatch.setattr("rehearse_ai.server.app.SmallWebRTCRequestHandler.handle_web_request", accept)
     return captured
 
 

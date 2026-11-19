@@ -338,7 +338,7 @@ def test_admin_plan_invitation_and_restricted_candidate_session(tmp_path, monkey
     class FakeLiveSession:
         def __init__(self, connection, _settings, **kwargs):
             self.connection = connection
-            self.candidate_id = kwargs["candidate_id"]
+            self.assignment_id = kwargs["assignment_id"]
             self.log = SimpleNamespace(session_id=kwargs["session_id"])
             self.done = asyncio.Event()
             captured.append(kwargs)
@@ -353,8 +353,8 @@ def test_admin_plan_invitation_and_restricted_candidate_session(tmp_path, monkey
         await callback(SimpleNamespace())
         return {"sdp": "synthetic-answer", "type": "answer"}
 
-    monkeypatch.setattr("rehearse_ai.server.LiveSession", FakeLiveSession)
-    monkeypatch.setattr("rehearse_ai.server.SmallWebRTCRequestHandler.handle_web_request", accept)
+    monkeypatch.setattr("rehearse_ai.server.routes.attempts.LiveSession", FakeLiveSession)
+    monkeypatch.setattr("rehearse_ai.server.app.SmallWebRTCRequestHandler.handle_web_request", accept)
     admin_email = f"admin-{uuid.uuid4().hex}@example.com"
     asyncio.run(
         create_admin(admin_email, PASSWORD, TEST_URL, "test-secret-at-least-thirty-two-characters")
@@ -466,7 +466,7 @@ def test_admin_plan_invitation_and_restricted_candidate_session(tmp_path, monkey
             accepted = candidate.post("/api/offer", json=offer, headers=candidate_headers)
             assert accepted.status_code == 200, accepted.text
             first = uuid.UUID(captured[0]["session_id"])
-            assert captured[0]["candidate_id"] == assignment_id
+            assert captured[0]["assignment_id"] == assignment_id
             # The live plan is the schema-validated dump: authored fields preserved, defaults added.
             assert [
                 {key: item[key] for key in PLAN["questions"][0]}

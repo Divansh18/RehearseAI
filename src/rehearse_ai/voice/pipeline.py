@@ -413,17 +413,17 @@ class LiveSession:
         settings: Settings,
         *,
         build_id: str | None = None,
-        candidate_id: str | None = None,
+        assignment_id: str | None = None,
         session_id: str | None = None,
         event_sink: Callable[[dict[str, Any]], bool] | None = None,
         interview_plan: dict[str, Any],
         self_reported_name: str | None = None,
     ) -> None:
         self.connection = connection
-        self.candidate_id = candidate_id
+        self.assignment_id = assignment_id
         self.log = SessionLog(settings.session_dir, session_id or str(uuid.uuid4()), event_sink)
-        if candidate_id is not None:
-            self.log.record("assignment_session_authenticated", assignment_id=candidate_id)
+        if assignment_id is not None:
+            self.log.record("assignment_session_authenticated", assignment_id=assignment_id)
         self.log.record(
             "stt_configured",
             model=settings.stt_model,
