@@ -1,28 +1,67 @@
-.venv/
+# --- Credentials and local environment -------------------------------------------------------
+# .env.example is the template and stays tracked.
 .env
 .env.*
 !.env.example
+
+# --- Python environments, caches, coverage, build artifacts ----------------------------------
+.venv/
+venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
 .coverage
+.coverage.*
 htmlcov/
 build/
 dist/
-sessions/
-private_pdfs/
-private_snapshots/
-/output/pdf/
-/output/ui/
-# Operational logs (REHEARSE_LOG_DIR, default logs/). Keep a custom directory outside the tree or ignored.
+
+# --- Private runtime data (never committed; paths resolve from the repository root) ----------
+# Operational logs, including rotated files (REHEARSE_LOG_DIR, default logs/). A custom log
+# directory inside the tree must be added here or kept outside it.
 logs/
-recordings/
-*.wav
-*.mp3
-*.ogg
-*.webm
+*.log
+*.log.[0-9]*
+*.jsonl.[0-9]*
+# Protected per-attempt conversation files (transcripts) and local recordings/exports.
+/sessions/
+/recordings/
+# Uploaded résumés and job descriptions, Conversation PDFs, interview-room images.
+/private_documents/
+/private_pdfs/
+/private_snapshots/
+# Scratch output of local checks and the browser smoke test.
+/output/
+/evaluation/output/
+/evaluation/tmp/
+
+# --- Local database dumps and backups ---------------------------------------------------------
+# (docker/init-test-db.sql is a tracked script, not a dump.)
+*.dump
+*.pgdump
+*.sql.gz
+*.sql.bz2
+*.backup
+/backups/
+
+# --- Local audio that is not a reviewed fixture ------------------------------------------------
+# Synthetic TTS comparison samples referenced by docs/historical/TTS_COMPARISON.md stay local.
+/docs/historical/samples/**/*.wav
+# Audio is otherwise not blanket-ignored: the tracked synthetic fixtures in
+# backend/tests/voice/audio/ are intentional, and any new audio file shows up for review.
+
+# --- Editors and OS ----------------------------------------------------------------------------
+# .vscode/settings.json is shared project configuration and stays tracked.
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
 .DS_Store
-private_documents/
-!backend/tests/voice/audio/*.wav
+Thumbs.db
