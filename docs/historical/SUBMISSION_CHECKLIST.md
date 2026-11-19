@@ -1,6 +1,6 @@
 # Submission checklist
 
-> **Historical.** File paths in this checklist describe the prototype as it was submitted. The code has since moved into capability packages and the practice interview described here was removed; see [ARCHITECTURE.md](ARCHITECTURE.md) for current locations.
+> **Historical.** File paths in this checklist describe the prototype as it was submitted. The code has since moved into capability packages and the practice interview described here was removed; see [ARCHITECTURE.md](../architecture/ARCHITECTURE.md) for current locations.
 
 The assignment brief is in the local `takehome-voice-agent.zip`. This checklist records repository state; it does not mark the take-home submission complete.
 
@@ -15,7 +15,7 @@ The assignment brief is in the local `takehome-voice-agent.zip`. This checklist 
 - Raw per-session timing and transcript instrumentation: `src/rehearse_ai/session_log.py`, `src/rehearse_ai/session.py`, `src/rehearse_ai/pipeline.py`.
 - Evidence export command and synthetic checks: `src/rehearse_ai/export_session.py`, `tests/test_export_session.py`, `RECORDING.md`.
 - Direct-provider diagnostic data, explicitly separate from end-to-end latency: `TTS_COMPARISON.md`, `samples/tts-comparison-2026-10-26/measurements.json`.
-- Author-confirmed [Loom recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7) matched to session `d564949d-6780-414f-8192-22bae9e9345d`; tracked [transcript](evidence/recorded-session/transcript.txt), [latency.jsonl](evidence/recorded-session/latency.jsonl), and [summary](evidence/recorded-session/latency_summary.md) preserve the export. `RECORDING.md` gives the scenario status and timing limitations.
+- Author-confirmed [Loom recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7) matched to session `d564949d-6780-414f-8192-22bae9e9345d`; tracked [transcript](recorded-session/transcript.txt), [latency.jsonl](recorded-session/latency.jsonl), and [summary](recorded-session/latency_summary.md) preserve the export. `RECORDING.md` gives the scenario status and timing limitations.
 - Recording-session latency is reported in `README.md`: 12 eligible turns, server-output p50 **2798.9 ms**, p95 **5007.3 ms**, with available stage averages and missing-field explanations. This is not measured browser playback.
 
 ## Pending before submission

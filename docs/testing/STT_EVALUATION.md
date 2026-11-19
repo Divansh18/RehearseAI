@@ -30,8 +30,8 @@ An older log (`5defd97b-6009-4951-90d5-47e044f4a80c`) contains one raw “Graph 
 Copy `evaluation/stt_clips.example.json` to a local manifest in an ignored directory, then record **your own consented** examples using its scripts. Include several names, GrepAI, genuine Graph AI, ordinary sentences, a thinking pause, and a correction. Do not use the historical private session logs as input. Convert each recording to mono 16-kHz PCM16 WAV (for example, `ffmpeg -i input.m4a -ac 1 -ar 16000 -c:a pcm_s16le output.wav`). Files must be at most 30 seconds and 5 MB. Adjust the reference to match what was actually spoken.
 
 ```sh
-uv run python -m rehearse_ai.voice.stt_evaluation --manifest sessions/stt-eval/manifest.json
-uv run python -m rehearse_ai.voice.stt_evaluation --manifest sessions/stt-eval/manifest.json --run --output sessions/stt-eval/results.json
+uv run --project backend python -m rehearse_ai.voice.stt_evaluation --manifest sessions/stt-eval/manifest.json
+uv run --project backend python -m rehearse_ai.voice.stt_evaluation --manifest sessions/stt-eval/manifest.json --run --output sessions/stt-eval/results.json
 ```
 
 The first command validates only. The second makes exactly two Deepgram requests per clip, alternating which condition goes first. Both requests use identical audio bytes, model, language, and punctuation; one uses no hints, the other uses the configured hints. The output records transcript, per-clip WER, exact term presence, possible false substitutions, request-to-response time, and errors. The prerecorded API is used for controlled recognition comparison; its request time is **not** streaming finalization, user-turn, LLM, TTS, transport, or browser latency. There are no audio clips in the repository and no real recognition comparison has been run. Text-only correction tests establish routing, not acoustic accuracy.

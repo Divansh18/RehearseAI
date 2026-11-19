@@ -11,7 +11,7 @@ PROMPTS_DIR = Path(__file__).resolve().parents[1] / "src" / "rehearse_ai" / "pro
 
 
 def test_documented_runtime_prompts_match_loaded_files() -> None:
-    document = (REPOSITORY / "PROMPTS.md").read_text(encoding="utf-8")
+    document = (REPOSITORY / "docs" / "product" / "PROMPTS.md").read_text(encoding="utf-8")
     for name in ("assigned_decision",):
         assert f"src/rehearse_ai/prompts/{name}.txt" in document
         assert load_prompt(name).strip()

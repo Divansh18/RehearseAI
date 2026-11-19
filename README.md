@@ -8,21 +8,26 @@ There is no manual question builder. Questions are generated from the documents;
 
 Requires Python 3.11+, [uv](https://docs.astral.sh/uv/), Docker Compose, and a desktop browser with camera, microphone and screen capture on localhost or HTTPS.
 
+Run every command from the **repository root** (`.env`, `sessions/`, `private_*/` are resolved relative
+to it). The Python project is in `backend/` and the browser code in `frontend/`; `uv --project backend`
+selects the project without changing directory. `make setup`, `make migrate` and `make run` are
+shorthand for the commands below.
+
 ```sh
 docker compose up -d --wait
-uv sync --frozen --group dev
+uv sync --frozen --project backend --group dev
 test -f .env || cp .env.example .env
 ```
 
 Fill `.env` without committing it: `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `CARTESIA_API_KEY` for the default voice, and a random `REHEARSE_AUTH_SECRET` of at least 32 characters. `DATABASE_URL` selects PostgreSQL; keep development and test databases separate. `REHEARSE_PUBLIC_BASE_URL` must match invitation links and `REHEARSE_INTERVIEWER_NAME` is the company/interviewer display name. `REHEARSE_LLM_MODEL` selects the OpenAI text model used both for plan preparation and the live interview. `.env.example` lists every voice, turn, storage, SMTP, job and server setting. Keys stay server-side.
 
 ```sh
-uv run alembic upgrade head          # applies 0001-0007 in order; run it again after pulling new migrations
-uv run python -m rehearse_ai.accounts.cli --create admin@example.com
-uv run python -m rehearse_ai
+uv run --project backend alembic -c backend/alembic.ini upgrade head   # 0001-0007 in order; rerun after pulling new migrations
+uv run --project backend python -m rehearse_ai.accounts.cli --create admin@example.com
+uv run --project backend python -m rehearse_ai
 ```
 
-The admin command asks for a password; there is no default admin. For a preserved active account, `uv run python -m rehearse_ai.accounts.cli admin@example.com` promotes it. Open [http://127.0.0.1:7860/](http://127.0.0.1:7860/) and sign in. [Mailpit](http://127.0.0.1:8025/) captures all local invitation and password-reset email; nothing is delivered externally. Production requires HTTPS, secure cookies, a production database and real SMTP credentials. **Production email delivery and deployment are unverified.**
+The admin command asks for a password; there is no default admin. For a preserved active account, `uv run --project backend python -m rehearse_ai.accounts.cli admin@example.com` promotes it. Open [http://127.0.0.1:7860/](http://127.0.0.1:7860/) and sign in. [Mailpit](http://127.0.0.1:8025/) captures all local invitation and password-reset email; nothing is delivered externally. Production requires HTTPS, secure cookies, a production database and real SMTP credentials. **Production email delivery and deployment are unverified.**
 
 ## How it works
 
@@ -44,28 +49,32 @@ The entered name, email, invitation possession and interview-room image do not e
 
 ## Architecture
 
-The layout, dependency direction, state ownership and where a change belongs are in [ARCHITECTURE.md](ARCHITECTURE.md); how to work on it is in [CONTRIBUTING.md](CONTRIBUTING.md).
+The layout, dependency direction, state ownership and where a change belongs are in [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md); how to work on it is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-| Area | Package |
+| Area | Where |
 | --- | --- |
-| Application startup, wiring and HTTP routes | `server/` (`app.py` composes; `routes/` has one router per capability), `config.py` |
+| Application startup, wiring and HTTP routes | `backend/src/rehearse_ai/server/` (`app.py` composes; `routes/` has one router per capability), `config.py` |
 | Administrator authentication | `accounts/` |
 | Interview plan schema and AI preparation | `plans/` (`prompts/plan_prepare.txt`, `prompts/plan_revise.txt`) |
 | Scheduling, document extraction, assignments | `scheduling/` |
-| Durable job runner | `jobs.py` |
+| Durable job runner | `jobs/` |
 | Invitations and restricted candidate access | `invitations/` |
 | Interview progression, controls, memory, time budget | `interview/` (provider-independent) |
 | Voice pipeline, providers, interruption handling | `voice/` (Deepgram -> OpenAI -> Cartesia via Pipecat) |
-| Records, private images, Conversation PDFs | `records/`, `models.py`, `migrations/` |
-| Frontend | `web/pages/`, `web/scripts/{admin,candidate}/`, `web/styles/` |
+| Records, private images, Conversation PDFs | `records/` |
+| Database connections and ORM models | `database/`; schema history in `backend/migrations/` |
+| Frontend | `frontend/pages/`, `frontend/scripts/{admin,candidate}/`, `frontend/styles/` |
+| Documentation | `docs/` |
+
+Package names are under `backend/src/rehearse_ai/`.
 
 **Jobs.** `interview_job` rows are claimed with `FOR UPDATE SKIP LOCKED` under a per-claim token; every state change is fenced by that token, so a worker that lost its lease cannot apply a stale result. Concurrency is bounded (2), model calls and SMTP have timeouts, failures retry with backoff up to 3 attempts, and the last failure is stored as a short code (never document or model text). On restart, jobs a previous process left running are re-queued. This assumes **one server process** (the host is restricted to loopback). A job can run more than once after a crash, so an invitation email may in rare cases be sent twice; each send rotates the link, so only the latest email's link works.
 
 **Plan lifecycle.** Preparation creates version 1; each successful revision adds a version. Starting an attempt takes the assignment lock, checks readiness, validates the stored plan against the *current* schema, and freezes that version on the interview record, all before anything is consumed. If validation fails the attempt is not used up. Revisions need the same lock and an unstarted assignment, so the version that starts is the version that runs.
 
-**Conversation.** An assigned interview opens with a short greeting using the name the candidate confirmed ("Hi Drake, how's your day going?"), one brief acknowledgement and a transition into question 1. The opening is one exchange, bounded in time, counted in active time (`opening_seconds` in the coverage summary) and can never become an answer or spend question 1's probes. Transcripts are placed by when they were created, not when they arrived, because Pipecat's turn boundary can overtake the transcript that caused it (`voice/pipeline.py`). Speech over audio that was barely heard is not treated as a reply to it, and speech over a closing ends the interview instead of resuming it. Clear conversational controls are deterministic (`interview/controls.py`): the controller keeps an authoritative pending prompt that a repeat, a detour or a refusal always returns to; repeating is bounded and says so when exhausted; ending outranks feedback; restart and go-back are declined honestly (a full restart is unavailable within an attempt); "I don't know" and refusals are recorded as the answer and not probed again; and the closing is fixed, neutral text with no promise about hiring. Brief background sound while the interviewer speaks is only a *tentative* detection (`voice/interruption.py`): it commits an interruption once STT hears a word or the sound lasts `REHEARSE_INTERRUPT_CONFIRM_SECS` (default 0.5 s), so genuine barge-in is slightly slower; this is duration- and transcript-based, not speaker identification, and sustained noise or other voices still interrupt. Findings, measurements and limits are in [CONVERSATION_QUALITY.md](CONVERSATION_QUALITY.md); the real-microphone checklist is [MANUAL_VOICE_TEST.md](MANUAL_VOICE_TEST.md); `evaluation/session_timings.py` reports per-stage timings from a session log without printing any transcript.
+**Conversation.** An assigned interview opens with a short greeting using the name the candidate confirmed ("Hi Drake, how's your day going?"), one brief acknowledgement and a transition into question 1. The opening is one exchange, bounded in time, counted in active time (`opening_seconds` in the coverage summary) and can never become an answer or spend question 1's probes. Transcripts are placed by when they were created, not when they arrived, because Pipecat's turn boundary can overtake the transcript that caused it (`backend/src/rehearse_ai/voice/pipeline.py`). Speech over audio that was barely heard is not treated as a reply to it, and speech over a closing ends the interview instead of resuming it. Clear conversational controls are deterministic (`backend/src/rehearse_ai/interview/controls.py`): the controller keeps an authoritative pending prompt that a repeat, a detour or a refusal always returns to; repeating is bounded and says so when exhausted; ending outranks feedback; restart and go-back are declined honestly (a full restart is unavailable within an attempt); "I don't know" and refusals are recorded as the answer and not probed again; and the closing is fixed, neutral text with no promise about hiring. Brief background sound while the interviewer speaks is only a *tentative* detection (`backend/src/rehearse_ai/voice/interruption.py`): it commits an interruption once STT hears a word or the sound lasts `REHEARSE_INTERRUPT_CONFIRM_SECS` (default 0.5 s), so genuine barge-in is slightly slower; this is duration- and transcript-based, not speaker identification, and sustained noise or other voices still interrupt. Findings, measurements and limits are in [CONVERSATION_QUALITY.md](docs/testing/CONVERSATION_QUALITY.md); the real-microphone checklist is [MANUAL_VOICE_TEST.md](docs/testing/MANUAL_VOICE_TEST.md); `evaluation/session_timings.py` reports per-stage timings from a session log without printing any transcript.
 
-**Execution.** Python owns order, required coverage and probe limits; the model proposes actions that Python validates. Each decision receives a *bounded* context: the current question and its own follow-up guidance, short topic labels for later questions (so earlier coverage can be recognised), clipped prior answers, corrected session memory and the last delivered prompt. It does not receive the full plan, future question text or guidance, grounding evidence or the administrator's private instructions. The browser receives only allowlisted events with minimal payloads (`interview/browser_events.py`); raw model output, prompts, plan data, memory facts and errors stay in the server log. A decision is logged as validated only after validation succeeds.
+**Execution.** Python owns order, required coverage and probe limits; the model proposes actions that Python validates. Each decision receives a *bounded* context: the current question and its own follow-up guidance, short topic labels for later questions (so earlier coverage can be recognised), clipped prior answers, corrected session memory and the last delivered prompt. It does not receive the full plan, future question text or guidance, grounding evidence or the administrator's private instructions. The browser receives only allowlisted events with minimal payloads (`backend/src/rehearse_ai/interview/browser_events.py`); raw model output, prompts, plan data, memory facts and errors stay in the server log. A decision is logged as validated only after validation succeeds.
 
 **Duration.** The target is a *soft* budget measured on a monotonic clock that excludes explicit media pauses. After 80% of the budget, or when required questions no longer fit, optional probing stops and optional questions are dropped. When the budget is used up the interview moves to its closing **after the current candidate turn finishes**; speech is never cut off. Possible overrun is therefore one candidate turn plus the closing, and a long silence is not timed out. Required questions that were not reached are recorded in the interview's coverage summary rather than hidden. Closing speech contains no feedback, scores or hiring promises (prompt plus a server check on the spoken text).
 
@@ -86,20 +95,19 @@ There is a single organisation. **Every administrator can see and act on every i
 ## Verification
 
 ```sh
-export REHEARSE_TEST_DATABASE_URL=postgresql+asyncpg://rehearse:rehearse_local_only@127.0.0.1:5433/rehearse_test
-uv run alembic upgrade head          # with DATABASE_URL pointing at the _test database
-uv run pytest -q                     # run serially: tests share one database
-node --test tests/frontend/browser_ui.test.mjs
-uv run ruff check . && uv run ruff format --check .
-uv lock --check && uv build
-uv run python evaluation/plan_preparation_check.py   # real model, invented documents (uses your OPENAI_API_KEY)
+make migrate-test    # migrations on the isolated *_test database (DATABASE_URL pointing at it)
+make test            # backend: pytest backend/tests, run serially (tests share one database)
+make test-frontend   # node tests and syntax checks of frontend/scripts
+make lint            # ruff check and format --check
+make check build     # lockfile check; sdist + a wheel built from it (into dist/)
+uv run --project backend python evaluation/plan_preparation_check.py   # real model, invented documents (uses your OPENAI_API_KEY)
 ```
 
-PostgreSQL tests need `REHEARSE_TEST_DATABASE_URL` ending in `_test` (Compose creates it) and the migrations applied to it. Mocked tests, the real-model plan check and real microphone sessions are different kinds of evidence; see [PLAN_PREPARATION_CHECKS.md](PLAN_PREPARATION_CHECKS.md) for the real-model results. Synthetic checks do not verify microphone recognition, browser playout, interview naturalness or external SMTP.
+PostgreSQL tests need `REHEARSE_TEST_DATABASE_URL` ending in `_test` (Compose creates it) and the migrations applied to it. Mocked tests, the real-model plan check and real microphone sessions are different kinds of evidence; see [PLAN_PREPARATION_CHECKS.md](docs/testing/PLAN_PREPARATION_CHECKS.md) for the real-model results. Synthetic checks do not verify microphone recognition, browser playout, interview naturalness or external SMTP.
 
 ### Local acceptance steps
 
-1. `docker compose up -d --wait`, then apply migrations and start the app as above.
+1. `docker compose up -d --wait`, then apply migrations and start the app as above (from the repository root).
 2. In one browser profile sign in at `/login` as an admin and open **Schedule interview**. Submit a candidate (use your own address), an invented résumé and job description, and a start time a few minutes ahead. Expect to land on **Assignments** with statuses moving from *queued* to *ready* / *sent*.
 3. Open Mailpit at `http://127.0.0.1:8025` and find the invitation. Confirm it contains the link, the window and duration but no questions or private instructions.
 4. In a **second, separate browser profile** open the link, press Continue, confirm your full name and check devices. If the plan is still preparing, Begin stays disabled until it is ready.
@@ -115,20 +123,20 @@ Real devices and provider keys are required for step 6. Screen capture may be un
 
 | Document | Covers |
 | --- | --- |
-| [ARCHITECTURE.md](ARCHITECTURE.md), [CONTRIBUTING.md](CONTRIBUTING.md) | Code layout, dependency direction, state ownership, how to work on it and verify |
-| [PRODUCT_WORKFLOW.md](PRODUCT_WORKFLOW.md), [PLAN.md](PLAN.md), [PRODUCT_CLEANUP.md](PRODUCT_CLEANUP.md) | Product behaviour, current state and known limits, what was retired |
-| [PROMPTS.md](PROMPTS.md) | The live prompts and what the model is given |
-| [migrations/MODELS_AND_MIGRATIONS.md](migrations/MODELS_AND_MIGRATIONS.md) | How the ORM models and the migrations are kept in agreement |
-| [MANUAL_VOICE_TEST.md](MANUAL_VOICE_TEST.md) | The real-microphone and real-device checklists (not yet run against the current build) |
+| [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md), [CONTRIBUTING.md](CONTRIBUTING.md) | Code layout, dependency direction, state ownership, how to work on it and verify |
+| [PRODUCT_WORKFLOW.md](docs/product/PRODUCT_WORKFLOW.md), [PLAN.md](docs/product/PLAN.md), [PRODUCT_CLEANUP.md](docs/product/PRODUCT_CLEANUP.md) | Product behaviour, current state and known limits, what was retired |
+| [PROMPTS.md](docs/product/PROMPTS.md) | The live prompts and what the model is given |
+| [MODELS_AND_MIGRATIONS.md](docs/architecture/MODELS_AND_MIGRATIONS.md) | How the ORM models and the migrations are kept in agreement |
+| [MANUAL_VOICE_TEST.md](docs/testing/MANUAL_VOICE_TEST.md) | The real-microphone and real-device checklists (not yet run against the current build) |
 
 **Dated reports and measurements** (accurate for the build and date they describe; module names inside
-them are updated, their numbers are not): [CONVERSATION_QUALITY.md](CONVERSATION_QUALITY.md),
-[STT_EVALUATION.md](STT_EVALUATION.md), [PLAN_PREPARATION_CHECKS.md](PLAN_PREPARATION_CHECKS.md),
-[TTS_COMPARISON.md](TTS_COMPARISON.md), [TTS_DIAGNOSIS.md](TTS_DIAGNOSIS.md).
+them are updated, their numbers are not): [CONVERSATION_QUALITY.md](docs/testing/CONVERSATION_QUALITY.md),
+[STT_EVALUATION.md](docs/testing/STT_EVALUATION.md), [PLAN_PREPARATION_CHECKS.md](docs/testing/PLAN_PREPARATION_CHECKS.md),
+[TTS_COMPARISON.md](docs/historical/TTS_COMPARISON.md), [TTS_DIAGNOSIS.md](docs/historical/TTS_DIAGNOSIS.md).
 
 **Historical prototype** (the earlier take-home; not verification of the current product): the
-[recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [RECORDING.md](RECORDING.md),
-[recorded evidence](evidence/recorded-session/) and [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md).
+[recording](https://www.loom.com/share/928bba7d68ec4174856488a0ed2e1bb7), [RECORDING.md](docs/historical/RECORDING.md),
+[recorded evidence](docs/historical/recorded-session) and [SUBMISSION_CHECKLIST.md](docs/historical/SUBMISSION_CHECKLIST.md).
 The practice interview and its prompts it describes were removed from the code and remain only in Git
 history; the invitation entry requires an assigned plan.
 

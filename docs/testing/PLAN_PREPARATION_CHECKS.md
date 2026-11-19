@@ -1,6 +1,6 @@
 # Plan preparation: real-model checks
 
-**What this is.** A bounded manual check of automatic question preparation using the real OpenAI model (`gpt-4.1-mini`, the configured `REHEARSE_LLM_MODEL`) on **invented** documents: a backend engineer, an AI engineer and a non-software role (logistics operations manager). Documents were turned into PDF/DOCX and read back through the production extractor. Run with `uv run python evaluation/plan_preparation_check.py`; full output is written to `evaluation/plan_checks/report.json` (invented data only).
+**What this is.** A bounded manual check of automatic question preparation using the real OpenAI model (`gpt-4.1-mini`, the configured `REHEARSE_LLM_MODEL`) on **invented** documents: a backend engineer, an AI engineer and a non-software role (logistics operations manager). Documents were turned into PDF/DOCX and read back through the production extractor. Run with `uv run --project backend python evaluation/plan_preparation_check.py`; full output is written to `evaluation/plan_checks/report.json` (invented data only).
 
 **What this is not.** It is not a pass/fail test, not an evaluation of conversation quality, and not a real microphone session. It is three scenarios, one run each after the final prompt change, judged by one reviewer (the author). Mocked tests, this real-model check and real-voice sessions are separate kinds of evidence.
 

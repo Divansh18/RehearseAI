@@ -1,14 +1,16 @@
 # Models and migrations
 
-The migrations in `migrations/versions/` are authoritative: they define what exists in a real
-database, and the application never creates tables itself. `src/rehearse_ai/models.py` describes the
+The migrations in `backend/migrations/versions/` are authoritative: they define what exists in a real
+database, and the application never creates tables itself. `backend/src/rehearse_ai/database/models.py` describes the
 same schema so that queries are typed and Alembic can detect change.
 
 The two **agree exactly**. For the migrated schema (0001–0007), the models declare every index with
 its migration name, uniqueness and partial predicate (e.g. `uq_job_active`, unique on
 `(assignment_id, kind)` where `status in ('queued','running')`), every server default, every CHECK
 constraint with its name, and the named unique constraint on `interview_record.assignment_id`
-(`uq_interview_assignment_attempt`). `alembic check` reports no operations.
+(`uq_interview_assignment_attempt`). `alembic check` reports no operations
+(`uv run --project backend alembic -c backend/alembic.ini check`, with `DATABASE_URL` pointing at a
+migrated database).
 
 ## Intentional differences
 
@@ -19,7 +21,7 @@ application relies on them when it builds rows in memory before flushing.
 
 ## How agreement is kept
 
-`tests/test_schema_drift.py` fails if they diverge:
+`backend/tests/test_schema_drift.py` fails if they diverge:
 
 1. Alembic's comparison of the models against the migrated test database (types and server
    defaults included) must be empty.

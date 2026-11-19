@@ -6,7 +6,7 @@ This is a six-request diagnostic, not an application or browser latency benchmar
 
 ## Configuration and method
 
-- OpenAI: `gpt-4o-mini-tts`, `shimmer`, speed `1.0`, and the app's current `src/rehearse_ai/prompts/tts_style.txt` instructions, via streaming `/v1/audio/speech`.
+- OpenAI: `gpt-4o-mini-tts`, `shimmer`, speed `1.0`, and the app's current `backend/src/rehearse_ai/prompts/tts_style.txt` instructions, via streaming `/v1/audio/speech`.
 - Cartesia: `sonic-3.6`, Skylar (`db6b0ed5-d5d3-463d-ae85-518a07d3c2b4`), English, default generation settings, API version `2026-08-14`, via streaming `/tts/bytes`.
 - Each request used raw mono 24 kHz, 16-bit PCM. The received bytes were wrapped in WAV files without changing the samples. The same three short interview lines were sent to each provider in alternating order: OpenAI, Cartesia, OpenAI, Cartesia, OpenAI, Cartesia. An HTTP client was reused across requests.
 - Request-to-first-audio starts immediately before the HTTPS request and stops at the first nonempty PCM body chunk. Total synthesis time stops when the response stream ends. These times include client/network and provider response time. They exclude Pipecat processing, transport output, browser buffering, and playback onset. A direct HTTPS request is also not identical to Cartesia's recommended persistent WebSocket service in Pipecat.

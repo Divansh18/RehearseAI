@@ -4,7 +4,7 @@ For a real person with a real microphone. Automated tests cannot verify recognit
 
 **Setup.** Local app and Mailpit running; schedule an interview to your own address with an *invented* résumé and job description; start time now. Use **headphones** (speakers can echo into the microphone and cause false interruptions) in a quiet room, and a second profile for the candidate. Note the browser and microphone.
 
-After the run, analyse the newest file: `uv run python evaluation/session_timings.py sessions/<newest>.jsonl` (prints no transcript text), and note `response_latency` events in that log.
+After the run, analyse the newest file: `uv run --project backend python evaluation/session_timings.py sessions/<newest>.jsonl` (prints no transcript text), and note `response_latency` events in that log.
 
 | # | Do this | Expect | Record |
 | --- | --- | --- | --- |
